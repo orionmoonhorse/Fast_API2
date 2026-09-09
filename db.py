@@ -1,12 +1,15 @@
 # db.py
 
-import sqlite3
 import os
+import psycopg2
+import psycopg2.extras
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "db", "scheduler.db")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(
+        DATABASE_URL,
+        sslmode="require"  # Railway Postgres requires SSL
+    )
+    conn.autocommit = True
     return conn

@@ -1,8 +1,33 @@
+# Python cache and virtual environments
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 venv/
+env/
+
+# Node dependencies
+node_modules/
+
+# Environment variables
 .env
 *.env
-*.db
+
+# Logs
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+
+# Frontend build output
+frontend/dist/
+frontend/node_modules/
+
+# Editor settings
+.vscode/
+.idea/
