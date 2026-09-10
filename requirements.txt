@@ -8,3 +8,4 @@ aiosqlite
 python-dotenv
 requests
 python-multipart
+psycopg2-binary
