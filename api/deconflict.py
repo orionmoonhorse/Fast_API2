@@ -1,11 +1,18 @@
+# deconflict.py
+
 from datetime import datetime, timedelta
+import psycopg2.extras
+
 
 def provider_exists(conn, provider_id):
-    q = "SELECT id FROM providers WHERE id = ?"
-    return conn.execute(q, (provider_id,)).fetchone() is not None
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    q = "SELECT id FROM providers WHERE id = %s"
+    return cur.execute(q, (provider_id,)) or cur.fetchone() is not None
 
 
 def generate_availability(conn, provider_id, date, duration_minutes):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
     date_obj = datetime.strptime(date, "%Y-%m-%d")
     day_index = date_obj.weekday()
     date_str = date
@@ -14,10 +21,11 @@ def generate_availability(conn, provider_id, date, duration_minutes):
     q_override = """
         SELECT start_time, end_time, is_closed
         FROM provider_hour_overrides
-        WHERE provider_id = ?
-        AND date = ?
+        WHERE provider_id = %s
+        AND date = %s
     """
-    override = conn.execute(q_override, (provider_id, date_str)).fetchone()
+    cur.execute(q_override, (provider_id, date_str))
+    override = cur.fetchone()
 
     if override:
         if override["is_closed"] == 1:
@@ -32,10 +40,11 @@ def generate_availability(conn, provider_id, date, duration_minutes):
         q_base = """
             SELECT start_time, end_time
             FROM provider_hours
-            WHERE provider_id = ?
-            AND day_of_week = ?
+            WHERE provider_id = %s
+            AND day_of_week = %s
         """
-        row = conn.execute(q_base, (provider_id, day_index)).fetchone()
+        cur.execute(q_base, (provider_id, day_index))
+        row = cur.fetchone()
         if not row:
             return []
 
@@ -55,26 +64,30 @@ def generate_availability(conn, provider_id, date, duration_minutes):
 
 
 def blackout_conflict(conn, provider_id, start_dt):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     q = """
         SELECT id FROM blackouts
-        WHERE provider_id = ?
-        AND date = ?
+        WHERE provider_id = %s
+        AND date = %s
     """
-    row = conn.execute(q, (provider_id, start_dt.date())).fetchone()
-    return row is not None
+    cur.execute(q, (provider_id, start_dt.date()))
+    return cur.fetchone() is not None
 
 
 def provider_hours_conflict(conn, provider_id, start_dt, end_dt):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
     day_index = start_dt.weekday()
     date_str = start_dt.strftime("%Y-%m-%d")
 
     q_override = """
         SELECT start_time, end_time, is_closed
         FROM provider_hour_overrides
-        WHERE provider_id = ?
-        AND date = ?
+        WHERE provider_id = %s
+        AND date = %s
     """
-    override = conn.execute(q_override, (provider_id, date_str)).fetchone()
+    cur.execute(q_override, (provider_id, date_str))
+    override = cur.fetchone()
 
     if override:
         if override["is_closed"] == 1:
@@ -92,10 +105,11 @@ def provider_hours_conflict(conn, provider_id, start_dt, end_dt):
     q_base = """
         SELECT start_time, end_time
         FROM provider_hours
-        WHERE provider_id = ?
-        AND day_of_week = ?
+        WHERE provider_id = %s
+        AND day_of_week = %s
     """
-    row = conn.execute(q_base, (provider_id, day_index)).fetchone()
+    cur.execute(q_base, (provider_id, day_index))
+    row = cur.fetchone()
 
     if not row:
         return True
@@ -109,17 +123,18 @@ def provider_hours_conflict(conn, provider_id, start_dt, end_dt):
     return False
 
 
-
-
 def overlaps(conn, provider_id, start_dt, end_dt):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
     q = """
         SELECT a.date, a.start_time, a.end_time
         FROM appointments a
         JOIN estimates e ON a.estimate_id = e.id
-        WHERE e.provider_id = ?
+        WHERE e.provider_id = %s
         AND a.status != 'cancelled'
     """
-    rows = conn.execute(q, (provider_id,)).fetchall()
+    cur.execute(q, (provider_id,))
+    rows = cur.fetchall()
 
     for r in rows:
         a_start = datetime.strptime(f"{r['date']} {r['start_time']}", "%Y-%m-%d %H:%M")
@@ -132,10 +147,10 @@ def overlaps(conn, provider_id, start_dt, end_dt):
 
 
 def buffer_conflict(conn, provider_id, start_dt, end_dt):
-    row = conn.execute(
-        "SELECT buffer_minutes FROM providers WHERE id = ?",
-        (provider_id,)
-    ).fetchone()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("SELECT buffer_minutes FROM providers WHERE id = %s", (provider_id,))
+    row = cur.fetchone()
 
     buffer_minutes = row["buffer_minutes"] if row else 0
     buffer_delta = timedelta(minutes=buffer_minutes)
@@ -144,10 +159,11 @@ def buffer_conflict(conn, provider_id, start_dt, end_dt):
         SELECT a.date, a.start_time, a.end_time
         FROM appointments a
         JOIN estimates e ON a.estimate_id = e.id
-        WHERE e.provider_id = ?
+        WHERE e.provider_id = %s
         AND a.status != 'cancelled'
     """
-    rows = conn.execute(q, (provider_id,)).fetchall()
+    cur.execute(q, (provider_id,))
+    rows = cur.fetchall()
 
     for r in rows:
         a_start = datetime.strptime(f"{r['date']} {r['start_time']}", "%Y-%m-%d %H:%M")
@@ -160,10 +176,10 @@ def buffer_conflict(conn, provider_id, start_dt, end_dt):
 
 
 def travel_conflict(conn, provider_id, start_dt, end_dt):
-    row = conn.execute(
-        "SELECT travel_time_minutes FROM providers WHERE id = ?",
-        (provider_id,)
-    ).fetchone()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("SELECT travel_time_minutes FROM providers WHERE id = %s", (provider_id,))
+    row = cur.fetchone()
 
     travel_minutes = row["travel_time_minutes"] if row else 0
     travel_delta = timedelta(minutes=travel_minutes)
@@ -172,10 +188,11 @@ def travel_conflict(conn, provider_id, start_dt, end_dt):
         SELECT a.date, a.start_time, a.end_time
         FROM appointments a
         JOIN estimates e ON a.estimate_id = e.id
-        WHERE e.provider_id = ?
+        WHERE e.provider_id = %s
         AND a.status != 'cancelled'
     """
-    rows = conn.execute(q, (provider_id,)).fetchall()
+    cur.execute(q, (provider_id,))
+    rows = cur.fetchall()
 
     for r in rows:
         a_start = datetime.strptime(f"{r['date']} {r['start_time']}", "%Y-%m-%d %H:%M")
@@ -198,8 +215,6 @@ def deconflict(conn, provider_id, start_dt, duration_minutes):
 
     if provider_hours_conflict(conn, provider_id, start_dt, end_dt):
         return {"ok": False, "reason": "outside_provider_hours"}
-
-
 
     if overlaps(conn, provider_id, start_dt, end_dt):
         return {"ok": False, "reason": "overlap"}

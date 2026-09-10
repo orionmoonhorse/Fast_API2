@@ -2,7 +2,8 @@
 
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
-from db import get_db   # <-- unified DB dependency
+import psycopg2.extras
+from db import get_db
 
 router = APIRouter()
 
@@ -12,7 +13,7 @@ router = APIRouter()
 # -----------------------------
 @router.get("/payment/invoice/{job_id}")
 def get_invoice(job_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT 
@@ -26,7 +27,7 @@ def get_invoice(job_id: int, conn=Depends(get_db)):
         JOIN estimates e ON j.estimate_id = e.id
         JOIN service_types st ON e.service_type_id = st.id
         JOIN clients c ON j.client_id = c.id
-        WHERE j.id = ?
+        WHERE j.id = %s
     """, (job_id,))
 
     r = cur.fetchone()
@@ -49,9 +50,9 @@ def get_invoice(job_id: int, conn=Depends(get_db)):
 # -----------------------------
 @router.post("/payment/pay")
 def make_payment(job_id: int, client_id: int, amount: float, method: str, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT id FROM jobs WHERE id = ?", (job_id,))
+    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -59,11 +60,12 @@ def make_payment(job_id: int, client_id: int, amount: float, method: str, conn=D
 
     cur.execute("""
         INSERT INTO payments (job_id, client_id, amount, method, status, created_at)
-        VALUES (?, ?, ?, ?, 'paid', ?)
+        VALUES (%s, %s, %s, %s, 'paid', %s)
+        RETURNING id
     """, (job_id, client_id, amount, method, now))
 
+    payment_id = cur.fetchone()["id"]
     conn.commit()
-    payment_id = cur.lastrowid
 
     return {
         "payment_id": payment_id,
@@ -80,17 +82,18 @@ def make_payment(job_id: int, client_id: int, amount: float, method: str, conn=D
 # -----------------------------
 @router.post("/payment/save-card")
 def save_card(client_id: int, last4: str, brand: str, token: str, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute("""
         INSERT INTO client_cards (client_id, last4, brand, token, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
     """, (client_id, last4, brand, token, now))
 
+    card_id = cur.fetchone()["id"]
     conn.commit()
-    card_id = cur.lastrowid
 
     return {
         "card_id": card_id,
@@ -106,11 +109,11 @@ def save_card(client_id: int, last4: str, brand: str, token: str, conn=Depends(g
 # -----------------------------
 @router.post("/payment/charge-card")
 def charge_saved_card(job_id: int, client_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT * FROM client_cards
-        WHERE client_id = ?
+        WHERE client_id = %s
         ORDER BY id DESC LIMIT 1
     """, (client_id,))
     card = cur.fetchone()
@@ -122,7 +125,7 @@ def charge_saved_card(job_id: int, client_id: int, conn=Depends(get_db)):
         SELECT e.price
         FROM jobs j
         JOIN estimates e ON j.estimate_id = e.id
-        WHERE j.id = ?
+        WHERE j.id = %s
     """, (job_id,))
     job = cur.fetchone()
 
@@ -134,11 +137,12 @@ def charge_saved_card(job_id: int, client_id: int, conn=Depends(get_db)):
 
     cur.execute("""
         INSERT INTO payments (job_id, client_id, amount, method, status, created_at)
-        VALUES (?, ?, ?, ?, 'paid', ?)
+        VALUES (%s, %s, %s, %s, 'paid', %s)
+        RETURNING id
     """, (job_id, client_id, amount, f"card:{card['last4']}", now))
 
+    payment_id = cur.fetchone()["id"]
     conn.commit()
-    payment_id = cur.lastrowid
 
     return {
         "payment_id": payment_id,
@@ -154,7 +158,7 @@ def charge_saved_card(job_id: int, client_id: int, conn=Depends(get_db)):
 # -----------------------------
 @router.get("/payment/history/{client_id}")
 def payment_history(client_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT 
@@ -168,7 +172,7 @@ def payment_history(client_id: int, conn=Depends(get_db)):
         JOIN jobs j ON p.job_id = j.id
         JOIN estimates e ON j.estimate_id = e.id
         JOIN service_types st ON e.service_type_id = st.id
-        WHERE p.client_id = ?
+        WHERE p.client_id = %s
         ORDER BY p.created_at DESC
     """, (client_id,))
 
@@ -192,7 +196,7 @@ def payment_history(client_id: int, conn=Depends(get_db)):
 # -----------------------------
 @router.get("/payment/receipt/{payment_id}")
 def payment_receipt(payment_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT 
@@ -208,7 +212,7 @@ def payment_receipt(payment_id: int, conn=Depends(get_db)):
         JOIN jobs j ON p.job_id = j.id
         JOIN estimates e ON j.estimate_id = e.id
         JOIN service_types st ON e.service_type_id = st.id
-        WHERE p.id = ?
+        WHERE p.id = %s
     """, (payment_id,))
 
     r = cur.fetchone()

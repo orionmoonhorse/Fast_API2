@@ -4,8 +4,9 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from datetime import datetime, timedelta
 import json
 import os
+import psycopg2.extras
 
-from db import get_db   # <-- unified DB dependency
+from db import get_db
 
 router = APIRouter()
 PHOTO_DIR = "job_photos/"
@@ -16,9 +17,9 @@ PHOTO_DIR = "job_photos/"
 # -----------------------------
 @router.post("/provider/login")
 def provider_login(email: str, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT id, name FROM providers WHERE email = ?", (email,))
+    cur.execute("SELECT id, name FROM providers WHERE email = %s", (email,))
     row = cur.fetchone()
 
     if not row:
@@ -38,7 +39,7 @@ def provider_login(email: str, conn=Depends(get_db)):
 def provider_today(provider_id: int, conn=Depends(get_db)):
     today = datetime.now().strftime("%Y-%m-%d")
 
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT 
@@ -57,7 +58,7 @@ def provider_today(provider_id: int, conn=Depends(get_db)):
         JOIN jobs j           ON j.estimate_id = e.id
         JOIN clients c        ON a.client_id = c.id
         JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.provider_id = ? AND a.date = ?
+        WHERE e.provider_id = %s AND a.date = %s
         ORDER BY a.start_time ASC
     """, (provider_id, today))
 
@@ -88,7 +89,7 @@ def provider_upcoming(provider_id: int, conn=Depends(get_db)):
     today = datetime.now()
     end = today + timedelta(days=7)
 
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT 
@@ -104,8 +105,8 @@ def provider_upcoming(provider_id: int, conn=Depends(get_db)):
         JOIN jobs j           ON j.estimate_id = e.id
         JOIN clients c        ON a.client_id = c.id
         JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.provider_id = ?
-          AND a.date BETWEEN ? AND ?
+        WHERE e.provider_id = %s
+          AND a.date BETWEEN %s AND %s
         ORDER BY a.date ASC, a.start_time ASC
     """, (
         provider_id,
@@ -137,7 +138,7 @@ def provider_week(provider_id: int, conn=Depends(get_db)):
     today = datetime.now().date()
     end = today + timedelta(days=6)
 
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT 
@@ -156,8 +157,8 @@ def provider_week(provider_id: int, conn=Depends(get_db)):
         JOIN jobs j           ON j.estimate_id = e.id
         JOIN clients c        ON a.client_id = c.id
         JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.provider_id = ?
-          AND a.date BETWEEN ? AND ?
+        WHERE e.provider_id = %s
+          AND a.date BETWEEN %s AND %s
         ORDER BY a.date ASC, a.start_time ASC
     """, (
         provider_id,
@@ -194,7 +195,7 @@ def provider_week(provider_id: int, conn=Depends(get_db)):
 # -----------------------------
 @router.get("/provider/job/{job_id}")
 def provider_job_details(job_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT 
@@ -216,7 +217,7 @@ def provider_job_details(job_id: int, conn=Depends(get_db)):
         JOIN estimates e ON j.estimate_id = e.id
         JOIN service_types st ON e.service_type_id = st.id
         JOIN clients c ON j.client_id = c.id
-        WHERE j.id = ?
+        WHERE j.id = %s
     """, (job_id,))
 
     r = cur.fetchone()
@@ -247,9 +248,9 @@ def provider_job_details(job_id: int, conn=Depends(get_db)):
 # -----------------------------
 @router.put("/provider/job/{job_id}/start")
 def provider_start_job(job_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT id FROM jobs WHERE id = ?", (job_id,))
+    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -257,8 +258,8 @@ def provider_start_job(job_id: int, conn=Depends(get_db)):
 
     cur.execute("""
         UPDATE jobs
-        SET status = 'in_progress', updated_at = ?
-        WHERE id = ?
+        SET status = 'in_progress', updated_at = %s
+        WHERE id = %s
     """, (now, job_id))
 
     conn.commit()
@@ -271,9 +272,9 @@ def provider_start_job(job_id: int, conn=Depends(get_db)):
 # -----------------------------
 @router.put("/provider/job/{job_id}/complete")
 def provider_complete_job(job_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT id FROM jobs WHERE id = ?", (job_id,))
+    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -281,8 +282,8 @@ def provider_complete_job(job_id: int, conn=Depends(get_db)):
 
     cur.execute("""
         UPDATE jobs
-        SET status = 'completed', updated_at = ?
-        WHERE id = ?
+        SET status = 'completed', updated_at = %s
+        WHERE id = %s
     """, (now, job_id))
 
     conn.commit()
@@ -316,9 +317,9 @@ def provider_upload_photo(job_id: int, file: UploadFile = File(...)):
 # -----------------------------
 @router.post("/provider/job/{job_id}/notes")
 def provider_add_notes(job_id: int, notes: str, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT id FROM jobs WHERE id = ?", (job_id,))
+    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -326,9 +327,11 @@ def provider_add_notes(job_id: int, notes: str, conn=Depends(get_db)):
 
     cur.execute("""
         INSERT INTO job_notes (job_id, notes, created_at)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
+        RETURNING id
     """, (job_id, notes, now))
 
+    note_id = cur.fetchone()["id"]
     conn.commit()
 
-    return {"job_id": job_id, "notes": notes, "message": "Notes added"}
+    return {"job_id": job_id, "note_id": note_id, "notes": notes, "message": "Notes added"}

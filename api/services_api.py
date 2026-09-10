@@ -1,7 +1,8 @@
 # api/service_types_api.py
 
 from fastapi import APIRouter, HTTPException, Depends
-from db import get_db   # <-- unified DB dependency
+import psycopg2.extras
+from db import get_db
 
 router = APIRouter()
 
@@ -11,7 +12,7 @@ router = APIRouter()
 # -----------------------------
 @router.get("/service-types")
 def get_service_types(conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT id, name, category, base_price, price_per_unit, unit_type, active
@@ -40,12 +41,12 @@ def get_service_types(conn=Depends(get_db)):
 # -----------------------------
 @router.get("/service-types/{service_type_id}")
 def get_service_type(service_type_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT id, name, category, base_price, price_per_unit, unit_type, active
         FROM service_types
-        WHERE id = ?
+        WHERE id = %s
     """, (service_type_id,))
 
     row = cur.fetchone()
@@ -53,15 +54,7 @@ def get_service_type(service_type_id: int, conn=Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="Service type not found")
 
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "category": row["category"],
-        "base_price": row["base_price"],
-        "price_per_unit": row["price_per_unit"],
-        "unit_type": row["unit_type"],
-        "active": row["active"]
-    }
+    return row
 
 
 # -----------------------------
@@ -76,16 +69,18 @@ def create_service_type(
     unit_type: str,
     conn=Depends(get_db)
 ):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         INSERT INTO service_types (name, category, base_price, price_per_unit, unit_type, active)
-        VALUES (?, ?, ?, ?, ?, 1)
+        VALUES (%s, %s, %s, %s, %s, 1)
+        RETURNING id
     """, (name, category, base_price, price_per_unit, unit_type))
 
+    new_id = cur.fetchone()["id"]
     conn.commit()
 
-    return {"status": "success", "service_type": name}
+    return {"status": "success", "service_type_id": new_id}
 
 
 # -----------------------------
@@ -102,33 +97,33 @@ def update_service_type(
     active: int = None,
     conn=Depends(get_db)
 ):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     fields = []
     values = []
 
     if name:
-        fields.append("name = ?")
+        fields.append("name = %s")
         values.append(name)
 
     if category:
-        fields.append("category = ?")
+        fields.append("category = %s")
         values.append(category)
 
     if base_price is not None:
-        fields.append("base_price = ?")
+        fields.append("base_price = %s")
         values.append(base_price)
 
     if price_per_unit is not None:
-        fields.append("price_per_unit = ?")
+        fields.append("price_per_unit = %s")
         values.append(price_per_unit)
 
     if unit_type:
-        fields.append("unit_type = ?")
+        fields.append("unit_type = %s")
         values.append(unit_type)
 
     if active is not None:
-        fields.append("active = ?")
+        fields.append("active = %s")
         values.append(active)
 
     if not fields:
@@ -136,7 +131,7 @@ def update_service_type(
 
     values.append(service_type_id)
 
-    query = f"UPDATE service_types SET {', '.join(fields)} WHERE id = ?"
+    query = f"UPDATE service_types SET {', '.join(fields)} WHERE id = %s"
 
     cur.execute(query, tuple(values))
     conn.commit()
@@ -149,12 +144,12 @@ def update_service_type(
 # -----------------------------
 @router.delete("/service-types/{service_type_id}")
 def delete_service_type(service_type_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         UPDATE service_types
         SET active = 0
-        WHERE id = ?
+        WHERE id = %s
     """, (service_type_id,))
 
     conn.commit()

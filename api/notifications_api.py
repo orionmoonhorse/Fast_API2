@@ -3,8 +3,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
 import json
+import psycopg2.extras
 
-from db import get_db   # <-- unified DB dependency
+from db import get_db
 
 router = APIRouter()
 
@@ -24,24 +25,24 @@ def send_sms(to: str, message: str):
 # FETCH CLIENT + PROVIDER INFO
 # -----------------------------
 def get_client(conn, client_id: int):
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM clients WHERE id = ?", (client_id,))
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM clients WHERE id = %s", (client_id,))
     return cur.fetchone()
 
 
 def get_provider(conn, provider_id: int):
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM providers WHERE id = ?", (provider_id,))
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM providers WHERE id = %s", (provider_id,))
     return cur.fetchone()
 
 
 def get_estimate_details(conn, estimate_id: int):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         SELECT e.*, st.name AS service_name, st.category AS service_category
         FROM estimates e
         JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.id = ?
+        WHERE e.id = %s
     """, (estimate_id,))
     return cur.fetchone()
 
@@ -97,9 +98,9 @@ def build_cancellation_message(appt, est):
 # -----------------------------
 @router.post("/notify/confirmation")
 def send_confirmation(appointment_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT * FROM appointments WHERE id = ?", (appointment_id,))
+    cur.execute("SELECT * FROM appointments WHERE id = %s", (appointment_id,))
     appt = cur.fetchone()
 
     if not appt:
@@ -123,9 +124,9 @@ def send_confirmation(appointment_id: int, conn=Depends(get_db)):
 # -----------------------------
 @router.post("/notify/reschedule")
 def send_reschedule_notification(appointment_id: int, old_date: str, old_time: str, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT * FROM appointments WHERE id = ?", (appointment_id,))
+    cur.execute("SELECT * FROM appointments WHERE id = %s", (appointment_id,))
     appt = cur.fetchone()
 
     if not appt:
@@ -149,9 +150,9 @@ def send_reschedule_notification(appointment_id: int, old_date: str, old_time: s
 # -----------------------------
 @router.post("/notify/cancel")
 def send_cancel_notification(appointment_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT * FROM appointments WHERE id = ?", (appointment_id,))
+    cur.execute("SELECT * FROM appointments WHERE id = %s", (appointment_id,))
     appt = cur.fetchone()
 
     if not appt:

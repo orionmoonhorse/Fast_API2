@@ -2,9 +2,10 @@
 
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime, timedelta
+import psycopg2.extras
 
 from api.deconflict import deconflict
-from db import get_db   # <-- unified DB dependency
+from db import get_db
 
 router = APIRouter()
 
@@ -25,7 +26,7 @@ def reschedule_appointment(
     new_start_time: str,
     conn=Depends(get_db)
 ):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     # -----------------------------
     # 1. Fetch existing appointment
@@ -34,7 +35,7 @@ def reschedule_appointment(
         SELECT id, estimate_id, client_id,
                date, start_time, end_time, reschedule_token
         FROM appointments
-        WHERE id = ?
+        WHERE id = %s
     """, (appointment_id,))
     appt = cur.fetchone()
 
@@ -52,7 +53,7 @@ def reschedule_appointment(
     cur.execute("""
         SELECT provider_id, duration_minutes
         FROM estimates
-        WHERE id = ?
+        WHERE id = %s
     """, (estimate_id,))
     est = cur.fetchone()
 
@@ -63,7 +64,9 @@ def reschedule_appointment(
     duration = est["duration_minutes"]
 
     # Convert new start time into full datetime
-    new_start_dt = datetime.strptime(f"{new_date} {new_start_time}", "%Y-%m-%d %H:%M")
+    new_start_dt = datetime.strptime(
+        f"{new_date} {new_start_time}", "%Y-%m-%d %H:%M"
+    )
 
     # -----------------------------
     # 3. Run deconflict engine
@@ -80,8 +83,8 @@ def reschedule_appointment(
 
     cur.execute("""
         UPDATE appointments
-        SET date = ?, start_time = ?, end_time = ?, status = 'rescheduled'
-        WHERE id = ?
+        SET date = %s, start_time = %s, end_time = %s, status = 'rescheduled'
+        WHERE id = %s
     """, (
         new_date,
         new_start_time,

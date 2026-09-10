@@ -1,17 +1,18 @@
-# bookint_api.py
+# booking_api.py
 
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
 import secrets
+import psycopg2.extras
 
-from db import get_db   # <-- unified DB dependency
+from db import get_db
 
 router = APIRouter()
 
 
 @router.post("/booking/create")
 def create_booking(payload: dict, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     # -----------------------------
     # Extract client info
@@ -58,13 +59,13 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     # -----------------------------
     cur.execute("""
         SELECT id FROM appointments
-        WHERE date = ? AND start_time = ? AND end_time = ?
+        WHERE date = %s AND start_time = %s AND end_time = %s
     """, (date, start_time, end_time))
 
     existing = cur.fetchone()
 
     if existing:
-        conn.rollback()   # IMPORTANT
+        conn.rollback()
         raise HTTPException(
             status_code=409,
             detail="This time slot has already been booked. Please choose another."
@@ -75,20 +76,22 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     # -----------------------------
     cur.execute("""
         INSERT INTO clients (name, phone, email, address, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
     """, (name, phone, email, address, notes, now))
 
-    client_id = cur.lastrowid
+    client_id = cur.fetchone()["id"]
 
     # -----------------------------
     # Insert estimate header
     # -----------------------------
     cur.execute("""
         INSERT INTO estimates (client_id, total_min_price, total_max_price)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
+        RETURNING id
     """, (client_id, total_min, total_max))
 
-    estimate_id = cur.lastrowid
+    estimate_id = cur.fetchone()["id"]
 
     # -----------------------------
     # Insert service line items
@@ -108,7 +111,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
                 min_price,
                 max_price
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             estimate_id,
             svc.get("service_type_id"),
@@ -139,18 +142,19 @@ def create_booking(payload: dict, conn=Depends(get_db)):
             status,
             reschedule_token
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?)
+        VALUES (%s, %s, %s, %s, %s, %s, 'scheduled', %s)
+        RETURNING id
     """, (
         estimate_id,
         client_id,
-        1,   # ⭐ FIXED — provider_id must NOT be None
+        1,  # provider_id placeholder
         date,
         start_time,
         end_time,
         reschedule_token
     ))
 
-    appointment_id = cur.lastrowid
+    appointment_id = cur.fetchone()["id"]
 
     conn.commit()
 

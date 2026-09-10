@@ -1,20 +1,21 @@
 # api/cancel_api.py
 
 from fastapi import APIRouter, HTTPException, Depends
-from db import get_db   # <-- unified DB dependency
+import psycopg2.extras
+from db import get_db
 
 router = APIRouter()
 
 
 @router.put("/cancel")
 def cancel_appointment(appointment_id: int, token: str, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     # 1. Fetch appointment
     cur.execute("""
         SELECT id, reschedule_token, status
         FROM appointments
-        WHERE id = ?
+        WHERE id = %s
     """, (appointment_id,))
     appt = cur.fetchone()
 
@@ -33,7 +34,7 @@ def cancel_appointment(appointment_id: int, token: str, conn=Depends(get_db)):
     cur.execute("""
         UPDATE appointments
         SET status = 'cancelled'
-        WHERE id = ?
+        WHERE id = %s
     """, (appointment_id,))
 
     conn.commit()

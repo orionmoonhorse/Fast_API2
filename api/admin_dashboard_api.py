@@ -1,18 +1,18 @@
-# api/admin_dashboard_api.py
+# admin_dashboard_api.py
 
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
-from db import get_db   # <-- unified DB dependency
+from db import get_db
+import psycopg2.extras
 
 router = APIRouter()
-
 
 # -----------------------------
 # ADMIN OVERVIEW
 # -----------------------------
 @router.get("/admin/overview")
 def admin_overview(conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("SELECT COUNT(*) AS count FROM clients")
     clients = cur.fetchone()["count"]
@@ -41,13 +41,12 @@ def admin_overview(conn=Depends(get_db)):
         "completed_appointments": completed
     }
 
-
 # -----------------------------
 # REVENUE STATS
 # -----------------------------
 @router.get("/admin/revenue")
 def admin_revenue(conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("SELECT SUM(price) AS total FROM estimates")
     total_revenue = cur.fetchone()["total"] or 0
@@ -55,7 +54,7 @@ def admin_revenue(conn=Depends(get_db)):
     cur.execute("""
         SELECT SUM(price) AS total
         FROM estimates
-        WHERE created_at >= date('now', '-30 days')
+        WHERE created_at >= NOW() - INTERVAL '30 days'
     """)
     last_30 = cur.fetchone()["total"] or 0
 
@@ -68,13 +67,12 @@ def admin_revenue(conn=Depends(get_db)):
         "average_job_value": round(avg_price, 2)
     }
 
-
 # -----------------------------
 # JOB STATS
 # -----------------------------
 @router.get("/admin/jobs")
 def admin_jobs(conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT status, COUNT(*) AS count
@@ -88,20 +86,19 @@ def admin_jobs(conn=Depends(get_db)):
         for r in rows
     ]
 
-
 # -----------------------------
 # APPOINTMENT STATS
 # -----------------------------
 @router.get("/admin/appointments")
 def admin_appointments(conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     today = datetime.now().strftime("%Y-%m-%d")
 
     cur.execute("""
         SELECT COUNT(*) AS count
         FROM appointments
-        WHERE date >= ? AND status != 'cancelled'
+        WHERE date >= %s AND status != 'cancelled'
     """, (today,))
     upcoming = cur.fetchone()["count"]
 
@@ -125,13 +122,12 @@ def admin_appointments(conn=Depends(get_db)):
         "cancelled": cancelled
     }
 
-
 # -----------------------------
 # PROVIDER PERFORMANCE
 # -----------------------------
 @router.get("/admin/providers/performance")
 def provider_performance(conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT 
@@ -159,13 +155,12 @@ def provider_performance(conn=Depends(get_db)):
         for r in rows
     ]
 
-
 # -----------------------------
 # SERVICE CATEGORY BREAKDOWN
 # -----------------------------
 @router.get("/admin/services/categories")
 def admin_service_categories(conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT st.category, COUNT(*) AS count
@@ -181,13 +176,12 @@ def admin_service_categories(conn=Depends(get_db)):
         for r in rows
     ]
 
-
 # -----------------------------
 # RECENT ACTIVITY FEED
 # -----------------------------
 @router.get("/admin/activity")
 def admin_activity(conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT 

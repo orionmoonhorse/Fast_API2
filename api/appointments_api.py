@@ -1,9 +1,12 @@
+# appointments_api.py
+
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime, timedelta
 import secrets
+import psycopg2.extras   # REQUIRED for RealDictCursor
 
 from db import get_db
-from api.sms import send_sms  # ⭐ your Node SMS bridge or local SMS sender
+from api.sms import send_sms
 
 router = APIRouter()
 
@@ -18,7 +21,7 @@ def format_time(dt: datetime) -> str:
 
 @router.post("/appointment/create")
 def create_appointment(payload: dict, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     print("\n=== RAW APPOINTMENT PAYLOAD RECEIVED ===")
     print(payload)
@@ -38,14 +41,14 @@ def create_appointment(payload: dict, conn=Depends(get_db)):
     cur.execute("""
         SELECT SUM(duration_minutes) AS total_duration
         FROM estimate_services
-        WHERE estimate_id = ?
+        WHERE estimate_id = %s
     """, (estimate_id,))
     row = cur.fetchone()
 
     duration = row["total_duration"] if row["total_duration"] else 60
 
     # -----------------------------
-    # 2. Provider assignment
+    # 2. Provider assignment (placeholder)
     # -----------------------------
     provider_id = None
 
@@ -69,7 +72,8 @@ def create_appointment(payload: dict, conn=Depends(get_db)):
             date, start_time, end_time,
             status, reschedule_token
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?)
+        VALUES (%s, %s, %s, %s, %s, %s, 'scheduled', %s)
+        RETURNING id
     """, (
         estimate_id,
         client_id,
@@ -80,14 +84,17 @@ def create_appointment(payload: dict, conn=Depends(get_db)):
         token
     ))
 
-    appointment_id = cur.lastrowid
+    appointment_id = cur.fetchone()["id"]
     conn.commit()
 
     # -----------------------------
     # 6. Fetch client info for SMS/email
     # -----------------------------
-    cur.execute("SELECT * FROM clients WHERE id = ?", (client_id,))
+    cur.execute("SELECT * FROM clients WHERE id = %s", (client_id,))
     client = cur.fetchone()
+
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
 
     # -----------------------------
     # 7. Send confirmation SMS
@@ -105,11 +112,6 @@ def create_appointment(payload: dict, conn=Depends(get_db)):
         "YOUR_OWNER_PHONE_NUMBER",
         f"New appointment scheduled: {client['name']} ({client['phone']}) on {date} at {start_time}."
     )
-
-    # -----------------------------
-    # 9. Optional: send confirmation email
-    # -----------------------------
-    # send_appointment_confirmation_email(client, date, start_time)
 
     return {
         "appointment_id": appointment_id,

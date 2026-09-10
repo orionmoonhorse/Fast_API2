@@ -1,13 +1,16 @@
-# api/availability_api.py
+# availability.py
 
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends
-from db import get_db   # <-- unified DB dependency
+from db import get_db
+import psycopg2.extras
 
 router = APIRouter()
 
 
-def parse_time(t: str) -> datetime:
+def parse_time_safe(t):
+    if t is None:
+        return None
     return datetime.strptime(t, "%H:%M")
 
 
@@ -16,44 +19,51 @@ def format_time(dt: datetime) -> str:
 
 
 def get_provider_hours(conn, provider_id: int, weekday: int):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         SELECT start_time, end_time
         FROM provider_hours
-        WHERE provider_id = ? AND day_of_week = ?
+        WHERE provider_id = %s AND day_of_week = %s
     """, (provider_id, weekday))
     return cur.fetchone()
 
 
 @router.get("/availability")
 def get_availability(date: str, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     weekday = datetime.strptime(date, "%Y-%m-%d").weekday()
-
     duration = 120
     provider_id = 1
 
+    # Provider hours
     provider_hours = get_provider_hours(conn, provider_id, weekday)
 
-    if provider_hours:
-        base_start = parse_time(provider_hours["start_time"])
-        base_end = parse_time(provider_hours["end_time"])
-    else:
-        base_start = parse_time("09:00")
-        base_end = parse_time("17:00")
+    start = parse_time_safe("09:00")
+    end = parse_time_safe("17:00")
 
+    if provider_hours:
+        ph_start = parse_time_safe(provider_hours["start_time"])
+        ph_end = parse_time_safe(provider_hours["end_time"])
+        if ph_start and ph_end:
+            start, end = ph_start, ph_end
+
+    base_start, base_end = start, end
+
+    # Rules
     cur.execute("""
         SELECT *
         FROM availability_rules
-        WHERE date = ?
+        WHERE date = %s
     """, (date,))
     rules = cur.fetchall()
 
+    # Full-day block
     for r in rules:
         if r["is_blocked"] == 1 and r["start_time"] is None:
             return []
 
+    # Generate slots
     slots = []
     current = base_start
 
@@ -63,6 +73,7 @@ def get_availability(date: str, conn=Depends(get_db)):
         slots.append((slot_start, slot_end))
         current += timedelta(minutes=duration)
 
+    # Rule blocking
     def slot_blocked(slot_start, slot_end):
         for r in rules:
             if r["is_blocked"] != 1:
@@ -71,32 +82,36 @@ def get_availability(date: str, conn=Depends(get_db)):
             if r["start_time"] is None:
                 return True
 
-            rule_start = parse_time(r["start_time"])
-            rule_end = parse_time(r["end_time"])
+            rule_start = parse_time_safe(r["start_time"])
+            rule_end = parse_time_safe(r["end_time"])
 
-            if slot_start < rule_end and slot_end > rule_start:
-                return True
+            if rule_start and rule_end:
+                if slot_start < rule_end and slot_end > rule_start:
+                    return True
 
         return False
 
     slots = [(s, e) for (s, e) in slots if not slot_blocked(s, e)]
 
+    # Appointments
     cur.execute("""
         SELECT start_time, end_time
         FROM appointments
-        WHERE date = ?
-          AND provider_id = ?
+        WHERE date = %s
+          AND provider_id = %s
           AND status != 'cancelled'
     """, (date, provider_id))
-
     appts = cur.fetchall()
 
     def slot_conflicts(slot_start, slot_end):
         for a in appts:
-            a_start = parse_time(a["start_time"])
-            a_end = parse_time(a["end_time"])
-            if slot_start < a_end and slot_end > a_start:
-                return True
+            a_start = parse_time_safe(a["start_time"])
+            a_end = parse_time_safe(a["end_time"])
+
+            if a_start and a_end:
+                if slot_start < a_end and slot_end > a_start:
+                    return True
+
         return False
 
     slots = [(s, e) for (s, e) in slots if not slot_conflicts(s, e)]

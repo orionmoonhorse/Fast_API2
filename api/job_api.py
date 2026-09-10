@@ -2,7 +2,8 @@
 
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
-from db import get_db   # <-- unified DB dependency
+import psycopg2.extras
+from db import get_db
 
 router = APIRouter()
 
@@ -12,13 +13,13 @@ router = APIRouter()
 # -----------------------------
 @router.post("/job/create")
 def create_job(estimate_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     # Fetch estimate
     cur.execute("""
         SELECT client_id, service_type_id
         FROM estimates
-        WHERE id = ?
+        WHERE id = %s
     """, (estimate_id,))
     est = cur.fetchone()
 
@@ -32,11 +33,12 @@ def create_job(estimate_id: int, conn=Depends(get_db)):
 
     cur.execute("""
         INSERT INTO jobs (estimate_id, client_id, status, created_at, updated_at)
-        VALUES (?, ?, 'pending', ?, ?)
+        VALUES (%s, %s, 'pending', %s, %s)
+        RETURNING id
     """, (estimate_id, client_id, now, now))
 
+    job_id = cur.fetchone()["id"]
     conn.commit()
-    job_id = cur.lastrowid
 
     return {
         "job_id": job_id,
@@ -52,7 +54,7 @@ def create_job(estimate_id: int, conn=Depends(get_db)):
 # -----------------------------
 @router.get("/job/{job_id}")
 def get_job(job_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT j.*, 
@@ -62,7 +64,7 @@ def get_job(job_id: int, conn=Depends(get_db)):
         FROM jobs j
         JOIN estimates e      ON j.estimate_id = e.id
         JOIN service_types st ON e.service_type_id = st.id
-        WHERE j.id = ?
+        WHERE j.id = %s
     """, (job_id,))
 
     row = cur.fetchone()
@@ -105,9 +107,9 @@ def update_job_status(job_id: int, status: str, conn=Depends(get_db)):
     if status not in valid_statuses:
         raise HTTPException(status_code=400, detail="Invalid status")
 
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT id FROM jobs WHERE id = ?", (job_id,))
+    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -115,8 +117,8 @@ def update_job_status(job_id: int, status: str, conn=Depends(get_db)):
 
     cur.execute("""
         UPDATE jobs
-        SET status = ?, updated_at = ?
-        WHERE id = ?
+        SET status = %s, updated_at = %s
+        WHERE id = %s
     """, (status, now, job_id))
 
     conn.commit()
@@ -133,15 +135,15 @@ def update_job_status(job_id: int, status: str, conn=Depends(get_db)):
 # -----------------------------
 @router.put("/job/{job_id}/assign")
 def assign_provider(job_id: int, provider_id: int, conn=Depends(get_db)):
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     # Validate job
-    cur.execute("SELECT id FROM jobs WHERE id = ?", (job_id,))
+    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Job not found")
 
     # Validate provider
-    cur.execute("SELECT id FROM providers WHERE id = ?", (provider_id,))
+    cur.execute("SELECT id FROM providers WHERE id = %s", (provider_id,))
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Provider not found")
 
@@ -149,8 +151,8 @@ def assign_provider(job_id: int, provider_id: int, conn=Depends(get_db)):
 
     cur.execute("""
         UPDATE jobs
-        SET provider_id = ?, updated_at = ?
-        WHERE id = ?
+        SET provider_id = %s, updated_at = %s
+        WHERE id = %s
     """, (provider_id, now, job_id))
 
     conn.commit()
