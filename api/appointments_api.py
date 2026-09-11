@@ -50,7 +50,7 @@ def create_appointment(payload: dict, conn=Depends(get_db)):
     # -----------------------------
     # 2. Provider assignment (placeholder)
     # -----------------------------
-    provider_id = None
+    provider_id = 1
 
     # -----------------------------
     # 3. Compute end time
