@@ -1,4 +1,4 @@
-# availability.py
+# availability_apy.py
 
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends
@@ -7,11 +7,27 @@ import psycopg2.extras
 
 router = APIRouter()
 
-
+# --- SAFE TIME PARSER ---
 def parse_time_safe(t):
     if t is None:
         return None
-    return datetime.strptime(t, "%H:%M")
+
+    # Normalize formats: "9:00", "09:00:00", "17:00:00.000000"
+    t = str(t).strip()
+
+    # If seconds exist, strip them
+    if len(t.split(":")) == 3:
+        t = ":".join(t.split(":")[:2])
+
+    # Pad hour if needed
+    parts = t.split(":")
+    if len(parts[0]) == 1:
+        t = f"0{parts[0]}:{parts[1]}"
+
+    try:
+        return datetime.strptime(t, "%H:%M")
+    except:
+        return None
 
 
 def format_time(dt: datetime) -> str:
@@ -45,7 +61,9 @@ def get_availability(date: str, conn=Depends(get_db)):
     if provider_hours:
         ph_start = parse_time_safe(provider_hours["start_time"])
         ph_end = parse_time_safe(provider_hours["end_time"])
-        if ph_start and ph_end:
+
+        # Only override if valid
+        if ph_start and ph_end and ph_start < ph_end:
             start, end = ph_start, ph_end
 
     base_start, base_end = start, end
@@ -58,9 +76,9 @@ def get_availability(date: str, conn=Depends(get_db)):
     """, (date,))
     rules = cur.fetchall()
 
-    # Full-day block
+    # Full-day block (only if explicitly set)
     for r in rules:
-        if r["is_blocked"] == 1 and r["start_time"] is None:
+        if r["is_blocked"] == 1 and r["start_time"] is None and r["end_time"] is None:
             return []
 
     # Generate slots
@@ -78,9 +96,6 @@ def get_availability(date: str, conn=Depends(get_db)):
         for r in rules:
             if r["is_blocked"] != 1:
                 continue
-
-            if r["start_time"] is None:
-                return True
 
             rule_start = parse_time_safe(r["start_time"])
             rule_end = parse_time_safe(r["end_time"])
