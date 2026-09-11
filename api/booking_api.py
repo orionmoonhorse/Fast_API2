@@ -14,6 +14,9 @@ router = APIRouter()
 def create_booking(payload: dict, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+    print("DEBUG: Connected to DB:", conn.dsn)
+    print("DEBUG: Incoming payload:", payload)
+
     # -----------------------------
     # Extract client info
     # -----------------------------
@@ -23,6 +26,8 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     email = client.get("email")
     address = client.get("service_address")
     notes = client.get("notes")
+
+    print("DEBUG: Client info:", client)
 
     if not name or not phone or not address:
         raise HTTPException(status_code=400, detail="Missing required client fields")
@@ -34,10 +39,15 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     total_min = estimate.get("total_min_price", 0.0)
     total_max = estimate.get("total_max_price", 0.0)
 
+    print("DEBUG: Estimate info:", estimate)
+    print("DEBUG: total_min:", total_min, "total_max:", total_max)
+
     # -----------------------------
     # Extract services list
     # -----------------------------
     services = payload.get("services", [])
+    print("DEBUG: Services list:", services)
+
     if not services:
         raise HTTPException(status_code=400, detail="At least one service is required")
 
@@ -49,6 +59,8 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     start_time = appointment.get("start_time")
     end_time = appointment.get("end_time")
 
+    print("DEBUG: Appointment info:", appointment)
+
     if not date or not start_time or not end_time:
         raise HTTPException(status_code=400, detail="Missing appointment fields")
 
@@ -57,12 +69,15 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     # -----------------------------
     # Prevent double booking
     # -----------------------------
+    print("DEBUG: Checking for double booking:", date, start_time, end_time)
+
     cur.execute("""
         SELECT id FROM appointments
         WHERE date = %s AND start_time = %s AND end_time = %s
     """, (date, start_time, end_time))
 
     existing = cur.fetchone()
+    print("DEBUG: Existing appointment:", existing)
 
     if existing:
         conn.rollback()
@@ -72,19 +87,40 @@ def create_booking(payload: dict, conn=Depends(get_db)):
         )
 
     # -----------------------------
-    # Insert client
+    # Insert or reuse client
     # -----------------------------
-    cur.execute("""
-        INSERT INTO clients (name, phone, email, address, notes, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING id
-    """, (name, phone, email, address, notes, now))
+    print("DEBUG: Checking for existing client by phone:", phone)
 
-    client_id = cur.fetchone()["id"]
+    cur.execute("""
+        SELECT id FROM clients
+        WHERE phone = %s
+        LIMIT 1
+    """, (phone,))
+
+    existing_client = cur.fetchone()
+
+    if existing_client:
+        client_id = existing_client["id"]
+        print("DEBUG: Reusing existing client:", client_id)
+    else:
+        print("DEBUG: Creating new client:", name, phone, email, address, notes)
+        cur.execute("""
+            INSERT INTO clients (name, phone, email, address, notes, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (name, phone, email, address, notes, now))
+        client_id = cur.fetchone()["id"]
+
+    print("DEBUG: Final client_id:", client_id)
 
     # -----------------------------
     # Insert estimate header
     # -----------------------------
+    print("DEBUG: Inserting estimate header with:",
+          "client_id:", client_id,
+          "total_min:", total_min,
+          "total_max:", total_max)
+
     cur.execute("""
         INSERT INTO estimates (client_id, total_min_price, total_max_price)
         VALUES (%s, %s, %s)
@@ -92,11 +128,14 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     """, (client_id, total_min, total_max))
 
     estimate_id = cur.fetchone()["id"]
+    print("DEBUG: New estimate_id:", estimate_id)
 
     # -----------------------------
     # Insert service line items
     # -----------------------------
     for svc in services:
+        print("DEBUG: Inserting service:", svc)
+
         cur.execute("""
             INSERT INTO estimate_services (
                 estimate_id,
@@ -131,6 +170,14 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     # -----------------------------
     reschedule_token = secrets.token_hex(8)
 
+    print("DEBUG: Inserting appointment:",
+          "estimate_id:", estimate_id,
+          "client_id:", client_id,
+          "provider_id:", 1,
+          "date:", date,
+          "start:", start_time,
+          "end:", end_time)
+
     cur.execute("""
         INSERT INTO appointments (
             estimate_id,
@@ -147,7 +194,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     """, (
         estimate_id,
         client_id,
-        1,  # provider_id placeholder
+        1,
         date,
         start_time,
         end_time,
@@ -155,8 +202,10 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     ))
 
     appointment_id = cur.fetchone()["id"]
+    print("DEBUG: New appointment_id:", appointment_id)
 
     conn.commit()
+    print("DEBUG: Booking committed successfully")
 
     return {
         "client_id": client_id,
