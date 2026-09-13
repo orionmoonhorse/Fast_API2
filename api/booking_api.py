@@ -4,18 +4,43 @@ from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
 import secrets
 import psycopg2.extras
+import requests
 
 from db import get_db
 
-from email import (
-    sendBookingEmail,
-    sendCustomerEmail,
-    sendLeadEmail,
-    sendDayBeforeEmail,
-    sendArrivalEmail
-)
-
 router = APIRouter()
+
+NODE_EMAIL_URL = "http://localhost:3000/send-booking-email"
+
+
+# ----------------------------------------------------
+# MESSAGE LOGGING HELPER
+# ----------------------------------------------------
+def log_message(conn, msg):
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO messages (
+            direction,
+            channel,
+            to_number,
+            from_number,
+            message_body,
+            status,
+            related_lead_id,
+            createdAt
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        msg.get("direction"),
+        msg.get("channel"),
+        msg.get("to"),
+        msg.get("from"),
+        msg.get("body"),
+        msg.get("status"),
+        msg.get("relatedLeadId"),
+        datetime.now().isoformat()
+    ))
+    conn.commit()
 
 
 @router.post("/booking/create")
@@ -48,7 +73,6 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     total_max = estimate.get("total_max_price", 0.0)
 
     print("DEBUG: Estimate info:", estimate)
-    print("DEBUG: total_min:", total_min, "total_max:", total_max)
 
     # -----------------------------
     # Extract services list
@@ -77,15 +101,12 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     # -----------------------------
     # Prevent double booking
     # -----------------------------
-    print("DEBUG: Checking for double booking:", date, start_time, end_time)
-
     cur.execute("""
         SELECT id FROM appointments
         WHERE date = %s AND start_time = %s AND end_time = %s
     """, (date, start_time, end_time))
 
     existing = cur.fetchone()
-    print("DEBUG: Existing appointment:", existing)
 
     if existing:
         conn.rollback()
@@ -97,8 +118,6 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     # -----------------------------
     # Insert or reuse client
     # -----------------------------
-    print("DEBUG: Checking for existing client by phone:", phone)
-
     cur.execute("""
         SELECT id FROM clients
         WHERE phone = %s
@@ -109,9 +128,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
 
     if existing_client:
         client_id = existing_client["id"]
-        print("DEBUG: Reusing existing client:", client_id)
     else:
-        print("DEBUG: Creating new client:", name, phone, email, address, notes)
         cur.execute("""
             INSERT INTO clients (name, phone, email, address, notes, created_at)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -119,16 +136,9 @@ def create_booking(payload: dict, conn=Depends(get_db)):
         """, (name, phone, email, address, notes, now))
         client_id = cur.fetchone()["id"]
 
-    print("DEBUG: Final client_id:", client_id)
-
     # -----------------------------
     # Insert estimate header
     # -----------------------------
-    print("DEBUG: Inserting estimate header with:",
-          "client_id:", client_id,
-          "total_min:", total_min,
-          "total_max:", total_max)
-
     cur.execute("""
         INSERT INTO estimates (client_id, total_min_price, total_max_price)
         VALUES (%s, %s, %s)
@@ -136,14 +146,11 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     """, (client_id, total_min, total_max))
 
     estimate_id = cur.fetchone()["id"]
-    print("DEBUG: New estimate_id:", estimate_id)
 
     # -----------------------------
     # Insert service line items
     # -----------------------------
     for svc in services:
-        print("DEBUG: Inserting service:", svc)
-
         cur.execute("""
             INSERT INTO estimate_services (
                 estimate_id,
@@ -178,14 +185,6 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     # -----------------------------
     reschedule_token = secrets.token_hex(8)
 
-    print("DEBUG: Inserting appointment:",
-          "estimate_id:", estimate_id,
-          "client_id:", client_id,
-          "provider_id:", 1,
-          "date:", date,
-          "start:", start_time,
-          "end:", end_time)
-
     cur.execute("""
         INSERT INTO appointments (
             estimate_id,
@@ -210,49 +209,58 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     ))
 
     appointment_id = cur.fetchone()["id"]
-    print("DEBUG: New appointment_id:", appointment_id)
 
     conn.commit()
-    print("DEBUG: Booking committed successfully")
 
     # ----------------------------------------------------
-    # 🔥 SEND EMAILS (Booking Confirmation + Lead Notice)
+    # LOG BOOKING EVENT
+    # ----------------------------------------------------
+    log_message(conn, {
+        "direction": "outbound",
+        "channel": "system",
+        "to": email,
+        "from": "River City Backend",
+        "body": f"Booking created for {name} on {date} at {start_time}",
+        "status": "created",
+        "relatedLeadId": client_id
+    })
+
+    # ----------------------------------------------------
+    # CALL NODE.JS EMAIL SERVICE
     # ----------------------------------------------------
     try:
-        print("🔥 DEBUG: About to send emails...")
-
-        lead_payload = {
-            "name": name,
-            "phone": phone,
-            "email": email,
-            "address": address,
-            "service": services[0].get("service_name"),
-            "details": notes,
-            "createdAt": now
-        }
-
-        print("🔥 DEBUG: Lead email payload:", lead_payload)
-
-        booking_payload = {
+        requests.post(NODE_EMAIL_URL, json={
             "name": name,
             "email": email,
             "service": services[0].get("service_name"),
             "date": date,
-            "time": start_time
-        }
+            "time": start_time,
+            "phone": phone,
+            "address": address,
+            "details": notes,
+            "leadId": client_id
+        })
 
-        print("🔥 DEBUG: Booking email payload:", booking_payload)
-
-        print("🔥 DEBUG: Calling sendLeadEmail...")
-        sendLeadEmail(lead_payload)
-
-        print("🔥 DEBUG: Calling sendBookingEmail...")
-        sendBookingEmail(booking_payload)
-
-        print("🔥 DEBUG: Email functions executed successfully.")
+        log_message(conn, {
+            "direction": "outbound",
+            "channel": "system",
+            "to": email,
+            "from": "River City Backend",
+            "body": "Node.js email service triggered",
+            "status": "sent",
+            "relatedLeadId": client_id
+        })
 
     except Exception as e:
-        print("❌ DEBUG: Email sending error:", e)
+        log_message(conn, {
+            "direction": "outbound",
+            "channel": "system",
+            "to": email,
+            "from": "River City Backend",
+            "body": f"Node.js email service failed: {e}",
+            "status": "error",
+            "relatedLeadId": client_id
+        })
 
     return {
         "client_id": client_id,
