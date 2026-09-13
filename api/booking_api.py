@@ -11,7 +11,7 @@ from db import get_db
 router = APIRouter()
 
 # Correct Node endpoint
-NODE_EMAIL_URL = "https://nodejs-production-77535.up.railway.app/send-email"
+NODE_EMAIL_URL = "https://nodejs-production-77535.up.railway.app/send-booking-email"
 
 
 def log_message(conn, msg):
