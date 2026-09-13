@@ -10,12 +10,10 @@ from db import get_db
 
 router = APIRouter()
 
-NODE_EMAIL_URL = "http://localhost:3000/send-booking-email"
+# Correct Node endpoint
+NODE_EMAIL_URL = "https://nodejs-production-77535.up.railway.app/send-email"
 
 
-# ----------------------------------------------------
-# MESSAGE LOGGING HELPER
-# ----------------------------------------------------
 def log_message(conn, msg):
     cur = conn.cursor()
     cur.execute("""
@@ -50,9 +48,6 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     print("DEBUG: Connected to DB:", conn.dsn)
     print("DEBUG: Incoming payload:", payload)
 
-    # -----------------------------
-    # Extract client info
-    # -----------------------------
     client = payload.get("client", {})
     name = client.get("name")
     phone = client.get("phone")
@@ -60,70 +55,30 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     address = client.get("service_address")
     notes = client.get("notes")
 
-    print("DEBUG: Client info:", client)
-
-    if not name or not phone or not address:
-        raise HTTPException(status_code=400, detail="Missing required client fields")
-
-    # -----------------------------
-    # Extract estimate info
-    # -----------------------------
     estimate = payload.get("estimate", {})
     total_min = estimate.get("total_min_price", 0.0)
     total_max = estimate.get("total_max_price", 0.0)
 
-    print("DEBUG: Estimate info:", estimate)
-
-    # -----------------------------
-    # Extract services list
-    # -----------------------------
     services = payload.get("services", [])
-    print("DEBUG: Services list:", services)
-
-    if not services:
-        raise HTTPException(status_code=400, detail="At least one service is required")
-
-    # -----------------------------
-    # Extract appointment info
-    # -----------------------------
     appointment = payload.get("appointment", {})
     date = appointment.get("date")
     start_time = appointment.get("start_time")
     end_time = appointment.get("end_time")
 
-    print("DEBUG: Appointment info:", appointment)
-
-    if not date or not start_time or not end_time:
-        raise HTTPException(status_code=400, detail="Missing appointment fields")
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # -----------------------------
     # Prevent double booking
-    # -----------------------------
     cur.execute("""
         SELECT id FROM appointments
         WHERE date = %s AND start_time = %s AND end_time = %s
     """, (date, start_time, end_time))
 
-    existing = cur.fetchone()
-
-    if existing:
+    if cur.fetchone():
         conn.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="This time slot has already been booked. Please choose another."
-        )
+        raise HTTPException(status_code=409, detail="This time slot has already been booked.")
 
-    # -----------------------------
     # Insert or reuse client
-    # -----------------------------
-    cur.execute("""
-        SELECT id FROM clients
-        WHERE phone = %s
-        LIMIT 1
-    """, (phone,))
-
+    cur.execute("SELECT id FROM clients WHERE phone = %s LIMIT 1", (phone,))
     existing_client = cur.fetchone()
 
     if existing_client:
@@ -136,9 +91,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
         """, (name, phone, email, address, notes, now))
         client_id = cur.fetchone()["id"]
 
-    # -----------------------------
-    # Insert estimate header
-    # -----------------------------
+    # Insert estimate
     cur.execute("""
         INSERT INTO estimates (client_id, total_min_price, total_max_price)
         VALUES (%s, %s, %s)
@@ -147,9 +100,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
 
     estimate_id = cur.fetchone()["id"]
 
-    # -----------------------------
-    # Insert service line items
-    # -----------------------------
+    # Insert services
     for svc in services:
         cur.execute("""
             INSERT INTO estimate_services (
@@ -180,9 +131,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
             svc.get("max_price")
         ))
 
-    # -----------------------------
     # Insert appointment
-    # -----------------------------
     reschedule_token = secrets.token_hex(8)
 
     cur.execute("""
@@ -209,12 +158,9 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     ))
 
     appointment_id = cur.fetchone()["id"]
-
     conn.commit()
 
-    # ----------------------------------------------------
-    # LOG BOOKING EVENT
-    # ----------------------------------------------------
+    # Log booking event
     log_message(conn, {
         "direction": "outbound",
         "channel": "system",
@@ -229,7 +175,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     # CALL NODE.JS EMAIL SERVICE
     # ----------------------------------------------------
     try:
-        requests.post(NODE_EMAIL_URL, json={
+        node_payload = {
             "name": name,
             "email": email,
             "service": services[0].get("service_name"),
@@ -239,19 +185,33 @@ def create_booking(payload: dict, conn=Depends(get_db)):
             "address": address,
             "details": notes,
             "leadId": client_id
-        })
+        }
+
+        print("DEBUG: Sending POST to Node:", NODE_EMAIL_URL)
+        print("DEBUG: Node payload:", node_payload)
+
+        node_response = requests.post(
+            NODE_EMAIL_URL,
+            json=node_payload,
+            timeout=10
+        )
+
+        print("DEBUG: Node response status:", node_response.status_code)
+        print("DEBUG: Node response body:", node_response.text)
 
         log_message(conn, {
             "direction": "outbound",
             "channel": "system",
             "to": email,
             "from": "River City Backend",
-            "body": "Node.js email service triggered",
+            "body": f"Node.js email service triggered. Status: {node_response.status_code}, Body: {node_response.text}",
             "status": "sent",
             "relatedLeadId": client_id
         })
 
     except Exception as e:
+        print("ERROR: Node.js email service failed:", e)
+
         log_message(conn, {
             "direction": "outbound",
             "channel": "system",
