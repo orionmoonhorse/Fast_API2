@@ -12,15 +12,16 @@ def parse_time_safe(t):
     if t is None:
         return None
 
-    # Normalize formats: "9:00", "09:00:00", "17:00:00.000000"
     t = str(t).strip()
 
+    # Normalize formats: "9:00", "09:00:00", "17:00:00.000000"
+    parts = t.split(":")
+
     # If seconds exist, strip them
-    if len(t.split(":")) == 3:
-        t = ":".join(t.split(":")[:2])
+    if len(parts) >= 3:
+        t = f"{parts[0]}:{parts[1]}"
 
     # Pad hour if needed
-    parts = t.split(":")
     if len(parts[0]) == 1:
         t = f"0{parts[0]}:{parts[1]}"
 
@@ -55,6 +56,7 @@ def get_availability(date: str, conn=Depends(get_db)):
     # Provider hours
     provider_hours = get_provider_hours(conn, provider_id, weekday)
 
+    # Default hours
     start = parse_time_safe("09:00")
     end = parse_time_safe("17:00")
 
@@ -123,6 +125,7 @@ def get_availability(date: str, conn=Depends(get_db)):
             a_start = parse_time_safe(a["start_time"])
             a_end = parse_time_safe(a["end_time"])
 
+            # Only check valid appointments
             if a_start and a_end:
                 if slot_start < a_end and slot_end > a_start:
                     return True

@@ -7,6 +7,14 @@ import psycopg2.extras
 
 from db import get_db
 
+from email import (
+    sendBookingEmail,
+    sendCustomerEmail,
+    sendLeadEmail,
+    sendDayBeforeEmail,
+    sendArrivalEmail
+)
+
 router = APIRouter()
 
 
@@ -206,6 +214,45 @@ def create_booking(payload: dict, conn=Depends(get_db)):
 
     conn.commit()
     print("DEBUG: Booking committed successfully")
+
+    # ----------------------------------------------------
+    # 🔥 SEND EMAILS (Booking Confirmation + Lead Notice)
+    # ----------------------------------------------------
+    try:
+        print("🔥 DEBUG: About to send emails...")
+
+        lead_payload = {
+            "name": name,
+            "phone": phone,
+            "email": email,
+            "address": address,
+            "service": services[0].get("service_name"),
+            "details": notes,
+            "createdAt": now
+        }
+
+        print("🔥 DEBUG: Lead email payload:", lead_payload)
+
+        booking_payload = {
+            "name": name,
+            "email": email,
+            "service": services[0].get("service_name"),
+            "date": date,
+            "time": start_time
+        }
+
+        print("🔥 DEBUG: Booking email payload:", booking_payload)
+
+        print("🔥 DEBUG: Calling sendLeadEmail...")
+        sendLeadEmail(lead_payload)
+
+        print("🔥 DEBUG: Calling sendBookingEmail...")
+        sendBookingEmail(booking_payload)
+
+        print("🔥 DEBUG: Email functions executed successfully.")
+
+    except Exception as e:
+        print("❌ DEBUG: Email sending error:", e)
 
     return {
         "client_id": client_id,
