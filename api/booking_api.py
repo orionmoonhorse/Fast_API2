@@ -1,7 +1,7 @@
 # booking_api.py
 
 from fastapi import APIRouter, HTTPException, Depends
-from datetime import datetime
+from datetime import datetime, date
 import secrets
 import psycopg2.extras
 import requests
@@ -61,17 +61,33 @@ def create_booking(payload: dict, conn=Depends(get_db)):
 
     services = payload.get("services", [])
     appointment = payload.get("appointment", {})
-    date = appointment.get("date")
+    date_str = appointment.get("date")
     start_time = appointment.get("start_time")
     end_time = appointment.get("end_time")
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # ----------------------------------------------------
+    # 🚫 PREVENT SAME-DAY BOOKINGS
+    # ----------------------------------------------------
+    try:
+        appt_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except:
+        raise HTTPException(status_code=400, detail="Invalid appointment date format.")
+
+    today = date.today()
+
+    if appt_date <= today:
+        raise HTTPException(
+            status_code=400,
+            detail="Same-day bookings are not allowed. Please select a future date."
+        )
+
     # Prevent double booking
     cur.execute("""
         SELECT id FROM appointments
         WHERE date = %s AND start_time = %s AND end_time = %s
-    """, (date, start_time, end_time))
+    """, (date_str, start_time, end_time))
 
     if cur.fetchone():
         conn.rollback()
@@ -151,7 +167,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
         estimate_id,
         client_id,
         1,
-        date,
+        date_str,
         start_time,
         end_time,
         reschedule_token
@@ -166,7 +182,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
         "channel": "system",
         "to": email,
         "from": "River City Backend",
-        "body": f"Booking created for {name} on {date} at {start_time}",
+        "body": f"Booking created for {name} on {date_str} at {start_time}",
         "status": "created",
         "relatedLeadId": client_id
     })
@@ -179,7 +195,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
             "name": name,
             "email": email,
             "service": services[0].get("service_name"),
-            "date": date,
+            "date": date_str,
             "time": start_time,
             "phone": phone,
             "address": address,
