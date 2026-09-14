@@ -68,7 +68,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # ----------------------------------------------------
-    # 🚫 PREVENT SAME-DAY BOOKINGS
+    # 🚫 PREVENT SAME-DAY & PAST-DAY BOOKINGS
     # ----------------------------------------------------
     try:
         appt_date = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -80,7 +80,7 @@ def create_booking(payload: dict, conn=Depends(get_db)):
     if appt_date <= today:
         raise HTTPException(
             status_code=400,
-            detail="Same-day bookings are not allowed. Please select a future date."
+            detail="Past dates and same-day bookings are not allowed. Please select a future date."
         )
 
     # Prevent double booking
