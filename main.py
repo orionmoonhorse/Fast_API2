@@ -7,11 +7,18 @@ from fastapi.responses import Response
 app = FastAPI()
 
 # ============================
-# CORS
+# CORS — FIXED
 # ============================
+origins = [
+    "http://127.0.0.1:5500",
+    "http://localhost:5500",
+    "https://rivercityappliance.com",
+    "https://fastapi2-production-efa7.up.railway.app"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
