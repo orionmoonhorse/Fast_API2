@@ -1,246 +1,182 @@
-# booking_api.py
+# api/booking_api.py
 
 from fastapi import APIRouter, HTTPException, Depends
-from datetime import datetime, date
-import secrets
+from pydantic import BaseModel, Field
+from typing import List, Literal
 import psycopg2.extras
-import requests
 
 from db import get_db
+from api.sms import send_sms
 
 router = APIRouter()
 
-# Correct Node endpoint
-NODE_EMAIL_URL = "https://nodejs-production-77535.up.railway.app/send-booking-email"
+# ============================
+# MODEL
+# ============================
+class BookingPayload(BaseModel):
+    client_id: int
+    services: List[Literal["diagnostic", "washer", "dryer"]]
+    issue_description: str = Field(..., min_length=5)
+    date: str
+    time: str
 
 
-def log_message(conn, msg):
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO messages (
-            direction,
-            channel,
-            to_number,
-            from_number,
-            message_body,
-            status,
-            related_lead_id,
-            createdAt
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """, (
-        msg.get("direction"),
-        msg.get("channel"),
-        msg.get("to"),
-        msg.get("from"),
-        msg.get("body"),
-        msg.get("status"),
-        msg.get("relatedLeadId"),
-        datetime.now().isoformat()
-    ))
-    conn.commit()
+# ============================
+# SNAPSHOT RANGES (ESTIMATED)
+# ============================
+def get_snapshot_ranges():
+    return {
+        "washer_repair_min": 129,
+        "washer_repair_max": 299,
+        "washer_estimated": "129–299 estimated",
+
+        "dryer_repair_min": 129,
+        "dryer_repair_max": 279,
+        "dryer_estimated": "129–279 estimated",
+
+        "diagnostic_min": 79,
+        "diagnostic_max": 129,
+        "diagnostic_estimated": "79–129 estimated",
+
+        "note": "Diagnostic fee is credited toward repair cost."
+    }
 
 
-@router.post("/booking/create")
-def create_booking(payload: dict, conn=Depends(get_db)):
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+# ============================
+# ESTIMATOR LOGIC
+# ============================
+def estimate_cost(services: list, issue_description: str):
+    diagnostic_min = 79
+    diagnostic_max = 129
 
-    print("DEBUG: Connected to DB:", conn.dsn)
-    print("DEBUG: Incoming payload:", payload)
-
-    client = payload.get("client", {})
-    name = client.get("name")
-    phone = client.get("phone")
-    email = client.get("email")
-    address = client.get("service_address")
-    notes = client.get("notes")
-
-    estimate = payload.get("estimate", {})
-    total_min = estimate.get("total_min_price", 0.0)
-    total_max = estimate.get("total_max_price", 0.0)
-
-    services = payload.get("services", [])
-    appointment = payload.get("appointment", {})
-    date_str = appointment.get("date")
-    start_time = appointment.get("start_time")
-    end_time = appointment.get("end_time")
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # ----------------------------------------------------
-    # 🚫 PREVENT SAME-DAY & PAST-DAY BOOKINGS
-    # ----------------------------------------------------
-    try:
-        appt_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-    except:
-        raise HTTPException(status_code=400, detail="Invalid appointment date format.")
-
-    today = date.today()
-
-    if appt_date <= today:
-        raise HTTPException(
-            status_code=400,
-            detail="Past dates and same-day bookings are not allowed. Please select a future date."
-        )
-
-    # Prevent double booking
-    cur.execute("""
-        SELECT id FROM appointments
-        WHERE date = %s AND start_time = %s AND end_time = %s
-    """, (date_str, start_time, end_time))
-
-    if cur.fetchone():
-        conn.rollback()
-        raise HTTPException(status_code=409, detail="This time slot has already been booked.")
-
-    # Insert or reuse client
-    cur.execute("SELECT id FROM clients WHERE phone = %s LIMIT 1", (phone,))
-    existing_client = cur.fetchone()
-
-    if existing_client:
-        client_id = existing_client["id"]
-    else:
-        cur.execute("""
-            INSERT INTO clients (name, phone, email, address, notes, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, (name, phone, email, address, notes, now))
-        client_id = cur.fetchone()["id"]
-
-    # Insert estimate
-    cur.execute("""
-        INSERT INTO estimates (client_id, total_min_price, total_max_price)
-        VALUES (%s, %s, %s)
-        RETURNING id
-    """, (client_id, total_min, total_max))
-
-    estimate_id = cur.fetchone()["id"]
-
-    # Insert services
-    for svc in services:
-        cur.execute("""
-            INSERT INTO estimate_services (
-                estimate_id,
-                service_type_id,
-                service_name,
-                linear_feet,
-                square_feet,
-                stories,
-                debris_level,
-                buildup_level,
-                surface_type,
-                min_price,
-                max_price
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            estimate_id,
-            svc.get("service_type_id"),
-            svc.get("service_name"),
-            svc.get("linear_feet", 0.0),
-            svc.get("square_feet", 0.0),
-            svc.get("stories", 0),
-            svc.get("debris_level"),
-            svc.get("buildup_level"),
-            svc.get("surface_type"),
-            svc.get("min_price"),
-            svc.get("max_price")
-        ))
-
-    # Insert appointment
-    reschedule_token = secrets.token_hex(8)
-
-    cur.execute("""
-        INSERT INTO appointments (
-            estimate_id,
-            client_id,
-            provider_id,
-            date,
-            start_time,
-            end_time,
-            status,
-            reschedule_token
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, 'scheduled', %s)
-        RETURNING id
-    """, (
-        estimate_id,
-        client_id,
-        1,
-        date_str,
-        start_time,
-        end_time,
-        reschedule_token
-    ))
-
-    appointment_id = cur.fetchone()["id"]
-    conn.commit()
-
-    # Log booking event
-    log_message(conn, {
-        "direction": "outbound",
-        "channel": "system",
-        "to": email,
-        "from": "River City Backend",
-        "body": f"Booking created for {name} on {date_str} at {start_time}",
-        "status": "created",
-        "relatedLeadId": client_id
-    })
-
-    # ----------------------------------------------------
-    # CALL NODE.JS EMAIL SERVICE
-    # ----------------------------------------------------
-    try:
-        node_payload = {
-            "name": name,
-            "email": email,
-            "service": services[0].get("service_name"),
-            "date": date_str,
-            "time": start_time,
-            "phone": phone,
-            "address": address,
-            "details": notes,
-            "leadId": client_id
+    # If diagnostic is selected, override everything
+    if "diagnostic" in services:
+        return {
+            "type": "diagnostic_only",
+            "diagnostic_min": diagnostic_min,
+            "diagnostic_max": diagnostic_max,
+            "diagnostic_estimated": f"{diagnostic_min}–{diagnostic_max} estimated",
+            "total_estimate": {
+                "min": diagnostic_min,
+                "max": diagnostic_max,
+                "estimated": f"{diagnostic_min}–{diagnostic_max} estimated"
+            },
+            "note": "Diagnostic selected — repair pricing hidden until after diagnosis."
         }
 
-        print("DEBUG: Sending POST to Node:", NODE_EMAIL_URL)
-        print("DEBUG: Node payload:", node_payload)
+    # Otherwise calculate repair costs
+    washer_min = 129
+    washer_max = 299
+    dryer_min = 129
+    dryer_max = 279
 
-        node_response = requests.post(
-            NODE_EMAIL_URL,
-            json=node_payload,
-            timeout=10
-        )
+    issue_keywords = {
+        "not spinning": 45,
+        "not draining": 60,
+        "leaking": 70,
+        "no power": 50,
+        "not heating": 65,
+        "loud noise": 40,
+        "burning smell": 80
+    }
 
-        print("DEBUG: Node response status:", node_response.status_code)
-        print("DEBUG: Node response body:", node_response.text)
+    additional = sum(
+        price for keyword, price in issue_keywords.items()
+        if keyword in issue_description.lower()
+    )
 
-        log_message(conn, {
-            "direction": "outbound",
-            "channel": "system",
-            "to": email,
-            "from": "River City Backend",
-            "body": f"Node.js email service triggered. Status: {node_response.status_code}, Body: {node_response.text}",
-            "status": "sent",
-            "relatedLeadId": client_id
-        })
+    breakdown = {}
+    total_min = 0
+    total_max = 0
 
-    except Exception as e:
-        print("ERROR: Node.js email service failed:", e)
+    if "washer" in services:
+        washer_total_min = washer_min + additional
+        washer_total_max = washer_max + additional
+        breakdown["washer"] = {
+            "min": washer_total_min,
+            "max": washer_total_max,
+            "estimated": f"{washer_total_min}–{washer_total_max} estimated"
+        }
+        total_min += washer_total_min
+        total_max += washer_total_max
 
-        log_message(conn, {
-            "direction": "outbound",
-            "channel": "system",
-            "to": email,
-            "from": "River City Backend",
-            "body": f"Node.js email service failed: {e}",
-            "status": "error",
-            "relatedLeadId": client_id
-        })
+    if "dryer" in services:
+        dryer_total_min = dryer_min + additional
+        dryer_total_max = dryer_max + additional
+        breakdown["dryer"] = {
+            "min": dryer_total_min,
+            "max": dryer_total_max,
+            "estimated": f"{dryer_total_min}–{dryer_total_max} estimated"
+        }
+        total_min += dryer_total_min
+        total_max += dryer_total_max
 
     return {
-        "client_id": client_id,
-        "estimate_id": estimate_id,
-        "appointment_id": appointment_id,
-        "status": "booking_created"
+        "type": "repair_estimate",
+        "breakdown": breakdown,
+        "additional": additional,
+        "total_estimate": {
+            "min": total_min,
+            "max": total_max,
+            "estimated": f"{total_min}–{total_max} estimated"
+        }
+    }
+
+
+# ============================
+# ROUTE
+# ============================
+@router.post("/booking/create")
+def create_booking(payload: BookingPayload, conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Fetch client
+    cur.execute("SELECT * FROM clients WHERE id = %s", (payload.client_id,))
+    client = cur.fetchone()
+
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Compute estimate
+    estimate = estimate_cost(payload.services, payload.issue_description)
+
+    # Insert booking
+    cur.execute("""
+        INSERT INTO bookings (client_id, services, issue_description, date, time, estimate_json)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
+    """, (
+        payload.client_id,
+        payload.services,
+        payload.issue_description,
+        payload.date,
+        payload.time,
+        estimate
+    ))
+
+    booking_id = cur.fetchone()["id"]
+    conn.commit()
+
+    # SMS confirmation
+    if estimate["type"] == "diagnostic_only":
+        sms_message = (
+            f"Hi {client['name']}! Your diagnostic appointment is scheduled for "
+            f"{payload.date} at {payload.time}. Diagnostic fee is "
+            f"${estimate['diagnostic_min']}–${estimate['diagnostic_max']} estimated."
+        )
+    else:
+        sms_message = (
+            f"Hi {client['name']}! Your repair appointment is scheduled for "
+            f"{payload.date} at {payload.time}. Estimated range: "
+            f"{estimate['total_estimate']['estimated']}."
+        )
+
+    send_sms(client["phone"], sms_message)
+
+    return {
+        "booking_id": booking_id,
+        "estimate": estimate,
+        "snapshot": get_snapshot_ranges(),
+        "services": payload.services,
+        "client": client
     }

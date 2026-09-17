@@ -8,15 +8,15 @@ router = APIRouter()
 
 
 # -----------------------------
-# GET ALL SERVICE TYPES
+# GET ALL SERVICES
 # -----------------------------
-@router.get("/service-types")
-def get_service_types(conn=Depends(get_db)):
+@router.get("/services")
+def get_services(conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
-        SELECT id, name, category, base_price, price_per_unit, unit_type, active
-        FROM service_types
+        SELECT id, name, default_duration, default_estimate_min, default_estimate_max, active
+        FROM services
         WHERE active = 1
     """)
 
@@ -26,10 +26,9 @@ def get_service_types(conn=Depends(get_db)):
         {
             "id": r["id"],
             "name": r["name"],
-            "category": r["category"],
-            "base_price": r["base_price"],
-            "price_per_unit": r["price_per_unit"],
-            "unit_type": r["unit_type"],
+            "default_duration": r["default_duration"],
+            "default_estimate_min": r["default_estimate_min"],
+            "default_estimate_max": r["default_estimate_max"],
             "active": r["active"]
         }
         for r in rows
@@ -37,63 +36,61 @@ def get_service_types(conn=Depends(get_db)):
 
 
 # -----------------------------
-# GET SINGLE SERVICE TYPE
+# GET SINGLE SERVICE
 # -----------------------------
-@router.get("/service-types/{service_type_id}")
-def get_service_type(service_type_id: int, conn=Depends(get_db)):
+@router.get("/services/{service_id}")
+def get_service(service_id: int, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
-        SELECT id, name, category, base_price, price_per_unit, unit_type, active
-        FROM service_types
+        SELECT id, name, default_duration, default_estimate_min, default_estimate_max, active
+        FROM services
         WHERE id = %s
-    """, (service_type_id,))
+    """, (service_id,))
 
     row = cur.fetchone()
 
     if not row:
-        raise HTTPException(status_code=404, detail="Service type not found")
+        raise HTTPException(status_code=404, detail="Service not found")
 
     return row
 
 
 # -----------------------------
-# CREATE SERVICE TYPE
+# CREATE SERVICE
 # -----------------------------
-@router.post("/service-types")
-def create_service_type(
+@router.post("/services")
+def create_service(
     name: str,
-    category: str,
-    base_price: float,
-    price_per_unit: float,
-    unit_type: str,
+    default_duration: int,
+    default_estimate_min: float,
+    default_estimate_max: float,
     conn=Depends(get_db)
 ):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
-        INSERT INTO service_types (name, category, base_price, price_per_unit, unit_type, active)
-        VALUES (%s, %s, %s, %s, %s, 1)
+        INSERT INTO services (name, default_duration, default_estimate_min, default_estimate_max, active)
+        VALUES (%s, %s, %s, %s, 1)
         RETURNING id
-    """, (name, category, base_price, price_per_unit, unit_type))
+    """, (name, default_duration, default_estimate_min, default_estimate_max))
 
     new_id = cur.fetchone()["id"]
     conn.commit()
 
-    return {"status": "success", "service_type_id": new_id}
+    return {"status": "success", "service_id": new_id}
 
 
 # -----------------------------
-# UPDATE SERVICE TYPE
+# UPDATE SERVICE
 # -----------------------------
-@router.put("/service-types/{service_type_id}")
-def update_service_type(
-    service_type_id: int,
+@router.put("/services/{service_id}")
+def update_service(
+    service_id: int,
     name: str = None,
-    category: str = None,
-    base_price: float = None,
-    price_per_unit: float = None,
-    unit_type: str = None,
+    default_duration: int = None,
+    default_estimate_min: float = None,
+    default_estimate_max: float = None,
     active: int = None,
     conn=Depends(get_db)
 ):
@@ -106,21 +103,17 @@ def update_service_type(
         fields.append("name = %s")
         values.append(name)
 
-    if category:
-        fields.append("category = %s")
-        values.append(category)
+    if default_duration is not None:
+        fields.append("default_duration = %s")
+        values.append(default_duration)
 
-    if base_price is not None:
-        fields.append("base_price = %s")
-        values.append(base_price)
+    if default_estimate_min is not None:
+        fields.append("default_estimate_min = %s")
+        values.append(default_estimate_min)
 
-    if price_per_unit is not None:
-        fields.append("price_per_unit = %s")
-        values.append(price_per_unit)
-
-    if unit_type:
-        fields.append("unit_type = %s")
-        values.append(unit_type)
+    if default_estimate_max is not None:
+        fields.append("default_estimate_max = %s")
+        values.append(default_estimate_max)
 
     if active is not None:
         fields.append("active = %s")
@@ -129,29 +122,29 @@ def update_service_type(
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    values.append(service_type_id)
+    values.append(service_id)
 
-    query = f"UPDATE service_types SET {', '.join(fields)} WHERE id = %s"
+    query = f"UPDATE services SET {', '.join(fields)} WHERE id = %s"
 
     cur.execute(query, tuple(values))
     conn.commit()
 
-    return {"status": "updated", "service_type_id": service_type_id}
+    return {"status": "updated", "service_id": service_id}
 
 
 # -----------------------------
-# DEACTIVATE SERVICE TYPE
+# DEACTIVATE SERVICE
 # -----------------------------
-@router.delete("/service-types/{service_type_id}")
-def delete_service_type(service_type_id: int, conn=Depends(get_db)):
+@router.delete("/services/{service_id}")
+def delete_service(service_id: int, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
-        UPDATE service_types
+        UPDATE services
         SET active = 0
         WHERE id = %s
-    """, (service_type_id,))
+    """, (service_id,))
 
     conn.commit()
 
-    return {"status": "deactivated", "service_type_id": service_type_id}
+    return {"status": "deactivated", "service_id": service_id}

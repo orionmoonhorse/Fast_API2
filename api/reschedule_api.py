@@ -32,7 +32,7 @@ def reschedule_appointment(
     # 1. Fetch existing appointment
     # -----------------------------
     cur.execute("""
-        SELECT id, estimate_id, client_id,
+        SELECT id, booking_id, client_id, provider_id,
                date, start_time, end_time, reschedule_token
         FROM appointments
         WHERE id = %s
@@ -45,23 +45,23 @@ def reschedule_appointment(
     if appt["reschedule_token"] != token:
         raise HTTPException(status_code=403, detail="Invalid reschedule token")
 
-    estimate_id = appt["estimate_id"]
+    booking_id = appt["booking_id"]
+    provider_id = appt["provider_id"]
 
     # -----------------------------
-    # 2. Fetch estimate (provider + duration)
+    # 2. Fetch booking (duration + estimate)
     # -----------------------------
     cur.execute("""
-        SELECT provider_id, duration_minutes
-        FROM estimates
+        SELECT duration_minutes
+        FROM bookings
         WHERE id = %s
-    """, (estimate_id,))
-    est = cur.fetchone()
+    """, (booking_id,))
+    booking = cur.fetchone()
 
-    if not est:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
 
-    provider_id = est["provider_id"]
-    duration = est["duration_minutes"]
+    duration = booking["duration_minutes"]
 
     # Convert new start time into full datetime
     new_start_dt = datetime.strptime(

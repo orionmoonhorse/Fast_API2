@@ -1,4 +1,4 @@
-# availability_apy.py
+# availability_api.py
 
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends

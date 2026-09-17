@@ -23,17 +23,13 @@ def provider_day(provider_id: int, date: str, conn=Depends(get_db)):
             a.start_time,
             a.end_time,
             a.status,
-            j.id AS job_id,
-            e.id AS estimate_id,
-            e.price,
-            e.duration_minutes,
-            st.name     AS service_name,
-            st.category AS service_category
+            b.id AS booking_id,
+            b.services,
+            b.issue_description,
+            b.estimate_json
         FROM appointments a
-        JOIN estimates e      ON a.estimate_id = e.id
-        JOIN jobs j           ON j.estimate_id = e.id
-        JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.provider_id = %s AND a.date = %s
+        JOIN bookings b ON a.booking_id = b.id
+        WHERE a.provider_id = %s AND a.date = %s
         ORDER BY a.start_time ASC
     """, (provider_id, date))
 
@@ -42,16 +38,14 @@ def provider_day(provider_id: int, date: str, conn=Depends(get_db)):
     return [
         {
             "appointment_id": r["appointment_id"],
-            "job_id": r["job_id"],
-            "estimate_id": r["estimate_id"],
+            "booking_id": r["booking_id"],
             "date": r["date"],
             "start_time": r["start_time"],
             "end_time": r["end_time"],
             "status": r["status"],
-            "service": r["service_name"],
-            "category": r["service_category"],
-            "price": r["price"],
-            "duration_minutes": r["duration_minutes"]
+            "services": r["services"],
+            "issue_description": r["issue_description"],
+            "estimate": r["estimate_json"]
         }
         for r in rows
     ]
@@ -74,17 +68,13 @@ def provider_week(provider_id: int, start_date: str, conn=Depends(get_db)):
             a.start_time,
             a.end_time,
             a.status,
-            j.id AS job_id,
-            e.id AS estimate_id,
-            e.price,
-            e.duration_minutes,
-            st.name     AS service_name,
-            st.category AS service_category
+            b.id AS booking_id,
+            b.services,
+            b.issue_description,
+            b.estimate_json
         FROM appointments a
-        JOIN estimates e      ON a.estimate_id = e.id
-        JOIN jobs j           ON j.estimate_id = e.id
-        JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.provider_id = %s
+        JOIN bookings b ON a.booking_id = b.id
+        WHERE a.provider_id = %s
           AND a.date BETWEEN %s AND %s
         ORDER BY a.date ASC, a.start_time ASC
     """, (
@@ -98,16 +88,14 @@ def provider_week(provider_id: int, start_date: str, conn=Depends(get_db)):
     return [
         {
             "appointment_id": r["appointment_id"],
-            "job_id": r["job_id"],
-            "estimate_id": r["estimate_id"],
+            "booking_id": r["booking_id"],
             "date": r["date"],
             "start_time": r["start_time"],
             "end_time": r["end_time"],
             "status": r["status"],
-            "service": r["service_name"],
-            "category": r["service_category"],
-            "price": r["price"],
-            "duration_minutes": r["duration_minutes"]
+            "services": r["services"],
+            "issue_description": r["issue_description"],
+            "estimate": r["estimate_json"]
         }
         for r in rows
     ]
@@ -123,38 +111,34 @@ def provider_stats(provider_id: int, conn=Depends(get_db)):
     # total (non‑cancelled)
     cur.execute("""
         SELECT COUNT(*) AS total
-        FROM appointments a
-        JOIN estimates e ON a.estimate_id = e.id
-        WHERE e.provider_id = %s AND a.status != 'cancelled'
+        FROM appointments
+        WHERE provider_id = %s AND status != 'cancelled'
     """, (provider_id,))
     total = cur.fetchone()["total"]
 
     # completed
     cur.execute("""
         SELECT COUNT(*) AS completed
-        FROM appointments a
-        JOIN estimates e ON a.estimate_id = e.id
-        WHERE e.provider_id = %s AND a.status = 'completed'
+        FROM appointments
+        WHERE provider_id = %s AND status = 'completed'
     """, (provider_id,))
     completed = cur.fetchone()["completed"]
 
     # cancelled
     cur.execute("""
         SELECT COUNT(*) AS cancelled
-        FROM appointments a
-        JOIN estimates e ON a.estimate_id = e.id
-        WHERE e.provider_id = %s AND a.status = 'cancelled'
+        FROM appointments
+        WHERE provider_id = %s AND status = 'cancelled'
     """, (provider_id,))
     cancelled = cur.fetchone()["cancelled"]
 
-    # by service category
+    # by service type (washer/dryer/diagnostic)
     cur.execute("""
-        SELECT st.category AS category, COUNT(*) AS count
+        SELECT b.services, COUNT(*) AS count
         FROM appointments a
-        JOIN estimates e      ON a.estimate_id = e.id
-        JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.provider_id = %s AND a.status != 'cancelled'
-        GROUP BY st.category
+        JOIN bookings b ON a.booking_id = b.id
+        WHERE a.provider_id = %s AND a.status != 'cancelled'
+        GROUP BY b.services
     """, (provider_id,))
     categories = cur.fetchall()
 
@@ -163,6 +147,6 @@ def provider_stats(provider_id: int, conn=Depends(get_db)):
         "completed": completed,
         "cancelled": cancelled,
         "categories": [
-            {"category": r["category"], "count": r["count"]} for r in categories
+            {"services": r["services"], "count": r["count"]} for r in categories
         ],
     }

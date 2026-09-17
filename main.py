@@ -30,7 +30,6 @@ from api.cancel_api import router as cancel_router
 from api.client_dashboard_api import router as client_dashboard_router
 from api.client_payment_api import router as client_payment_router
 from api.client_portal_api import router as client_portal_router
-from api.job_api import router as job_router
 from api.notifications_api import router as notifications_router
 from api.services_api import router as services_router
 from api.booking_api import router as booking_router
@@ -48,7 +47,6 @@ app.include_router(cancel_router)
 app.include_router(client_dashboard_router)
 app.include_router(client_payment_router)
 app.include_router(client_portal_router)
-app.include_router(job_router)
 app.include_router(notifications_router)
 app.include_router(services_router)
 app.include_router(booking_router)

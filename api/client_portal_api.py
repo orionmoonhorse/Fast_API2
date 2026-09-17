@@ -2,9 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
-import json
 import psycopg2.extras
-
 from db import get_db
 
 router = APIRouter()
@@ -33,30 +31,29 @@ def client_profile(client_id: int, conn=Depends(get_db)):
 
 
 # -----------------------------
-# CLIENT ESTIMATES LIST
+# CLIENT BOOKINGS LIST
 # -----------------------------
-@router.get("/portal/client/{client_id}/estimates")
-def client_estimates(client_id: int, conn=Depends(get_db)):
+@router.get("/portal/client/{client_id}/bookings")
+def client_bookings(client_id: int, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
-        SELECT e.id, e.price, e.duration_minutes, e.created_at,
-               st.name AS service_name, st.category AS service_category
-        FROM estimates e
-        JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.client_id = %s
-        ORDER BY e.created_at DESC
+        SELECT id, services, issue_description, date, time, estimate_json, created_at
+        FROM bookings
+        WHERE client_id = %s
+        ORDER BY created_at DESC
     """, (client_id,))
 
     rows = cur.fetchall()
 
     return [
         {
-            "estimate_id": r["id"],
-            "service": r["service_name"],
-            "category": r["service_category"],
-            "price": r["price"],
-            "duration_minutes": r["duration_minutes"],
+            "booking_id": r["id"],
+            "services": r["services"],
+            "issue_description": r["issue_description"],
+            "date": r["date"],
+            "time": r["time"],
+            "estimate": r["estimate_json"],
             "created_at": r["created_at"]
         }
         for r in rows
@@ -64,101 +61,33 @@ def client_estimates(client_id: int, conn=Depends(get_db)):
 
 
 # -----------------------------
-# CLIENT ESTIMATE DETAILS
+# BOOKING DETAILS
 # -----------------------------
-@router.get("/portal/estimate/{estimate_id}")
-def estimate_details(estimate_id: int, conn=Depends(get_db)):
+@router.get("/portal/booking/{booking_id}")
+def booking_details(booking_id: int, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
-        SELECT e.*, st.name AS service_name, st.category AS service_category
-        FROM estimates e
-        JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.id = %s
-    """, (estimate_id,))
+        SELECT id, client_id, services, issue_description, date, time, estimate_json, created_at
+        FROM bookings
+        WHERE id = %s
+    """, (booking_id,))
 
     r = cur.fetchone()
 
     if not r:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+        raise HTTPException(status_code=404, detail="Booking not found")
 
     return {
-        "estimate_id": r["id"],
-        "service": r["service_name"],
-        "category": r["service_category"],
-        "price": r["price"],
-        "duration_minutes": r["duration_minutes"],
-        "linear_feet": r["linear_feet"],
-        "square_feet": r["square_feet"],
-        "stories": r["stories"],
-        "add_ons": json.loads(r["add_ons"]) if r["add_ons"] else {},
+        "booking_id": r["id"],
+        "client_id": r["client_id"],
+        "services": r["services"],
+        "issue_description": r["issue_description"],
+        "date": r["date"],
+        "time": r["time"],
+        "estimate": r["estimate_json"],
         "created_at": r["created_at"]
     }
-
-
-# -----------------------------
-# APPROVE ESTIMATE → CREATE JOB
-# -----------------------------
-@router.post("/portal/estimate/{estimate_id}/approve")
-def approve_estimate(estimate_id: int, conn=Depends(get_db)):
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    cur.execute("SELECT client_id FROM estimates WHERE id = %s", (estimate_id,))
-    est = cur.fetchone()
-
-    if not est:
-        raise HTTPException(status_code=404, detail="Estimate not found")
-
-    client_id = est["client_id"]
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    cur.execute("""
-        INSERT INTO jobs (estimate_id, client_id, status, created_at, updated_at)
-        VALUES (%s, %s, 'pending', %s, %s)
-        RETURNING id
-    """, (estimate_id, client_id, now, now))
-
-    job_id = cur.fetchone()["id"]
-    conn.commit()
-
-    return {
-        "job_id": job_id,
-        "estimate_id": estimate_id,
-        "message": "Estimate approved. Job created and ready for scheduling."
-    }
-
-
-# -----------------------------
-# CLIENT JOB LIST
-# -----------------------------
-@router.get("/portal/client/{client_id}/jobs")
-def client_jobs(client_id: int, conn=Depends(get_db)):
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    cur.execute("""
-        SELECT j.id AS job_id, j.status, j.created_at,
-               st.name AS service_name, st.category AS service_category,
-               e.price
-        FROM jobs j
-        JOIN estimates e ON j.estimate_id = e.id
-        JOIN service_types st ON e.service_type_id = st.id
-        WHERE j.client_id = %s
-        ORDER BY j.created_at DESC
-    """, (client_id,))
-
-    rows = cur.fetchall()
-
-    return [
-        {
-            "job_id": r["job_id"],
-            "status": r["status"],
-            "service": r["service_name"],
-            "category": r["service_category"],
-            "price": r["price"],
-            "created_at": r["created_at"]
-        }
-        for r in rows
-    ]
 
 
 # -----------------------------
@@ -171,11 +100,12 @@ def client_appointments(client_id: int, conn=Depends(get_db)):
     cur.execute("""
         SELECT a.id AS appointment_id,
                a.date, a.start_time, a.end_time, a.status,
-               st.name AS service_name, st.category AS service_category,
-               a.reschedule_token
+               a.reschedule_token,
+               b.id AS booking_id,
+               b.services,
+               b.issue_description
         FROM appointments a
-        JOIN estimates e ON a.estimate_id = e.id
-        JOIN service_types st ON e.service_type_id = st.id
+        JOIN bookings b ON a.booking_id = b.id
         WHERE a.client_id = %s
         ORDER BY a.date ASC, a.start_time ASC
     """, (client_id,))
@@ -185,12 +115,13 @@ def client_appointments(client_id: int, conn=Depends(get_db)):
     return [
         {
             "appointment_id": r["appointment_id"],
+            "booking_id": r["booking_id"],
             "date": r["date"],
             "start_time": r["start_time"],
             "end_time": r["end_time"],
             "status": r["status"],
-            "service": r["service_name"],
-            "category": r["service_category"],
+            "services": r["services"],
+            "issue_description": r["issue_description"],
             "reschedule_link": f"/reschedule?appointment_id={r['appointment_id']}&token={r['reschedule_token']}",
             "cancel_link": f"/cancel?appointment_id={r['appointment_id']}&token={r['reschedule_token']}"
         }
@@ -205,12 +136,15 @@ def client_appointments(client_id: int, conn=Depends(get_db)):
 def client_dashboard(client_id: int, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT COUNT(*) AS count FROM estimates WHERE client_id = %s", (client_id,))
-    estimates = cur.fetchone()["count"]
+    # Total bookings
+    cur.execute("SELECT COUNT(*) AS count FROM bookings WHERE client_id = %s", (client_id,))
+    bookings_count = cur.fetchone()["count"]
 
-    cur.execute("SELECT COUNT(*) AS count FROM jobs WHERE client_id = %s", (client_id,))
-    jobs = cur.fetchone()["count"]
+    # Total appointments
+    cur.execute("SELECT COUNT(*) AS count FROM appointments WHERE client_id = %s", (client_id,))
+    appointments_count = cur.fetchone()["count"]
 
+    # Upcoming appointments (today or later, not cancelled)
     today = datetime.now().strftime("%Y-%m-%d")
     cur.execute("""
         SELECT COUNT(*) AS count
@@ -219,8 +153,31 @@ def client_dashboard(client_id: int, conn=Depends(get_db)):
     """, (client_id, today))
     upcoming = cur.fetchone()["count"]
 
+    # Last booking summary
+    cur.execute("""
+        SELECT id, services, issue_description, date, time, estimate_json, created_at
+        FROM bookings
+        WHERE client_id = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+    """, (client_id,))
+    last_booking = cur.fetchone()
+
+    last_booking_data = None
+    if last_booking:
+        last_booking_data = {
+            "booking_id": last_booking["id"],
+            "services": last_booking["services"],
+            "issue_description": last_booking["issue_description"],
+            "date": last_booking["date"],
+            "time": last_booking["time"],
+            "estimate": last_booking["estimate_json"],
+            "created_at": last_booking["created_at"]
+        }
+
     return {
-        "total_estimates": estimates,
-        "total_jobs": jobs,
-        "upcoming_appointments": upcoming
+        "total_bookings": bookings_count,
+        "total_appointments": appointments_count,
+        "upcoming_appointments": upcoming,
+        "last_booking": last_booking_data
     }

@@ -9,7 +9,7 @@ import psycopg2.extras
 from db import get_db
 
 router = APIRouter()
-PHOTO_DIR = "job_photos/"
+PHOTO_DIR = "appointment_photos/"
 
 
 # -----------------------------
@@ -33,7 +33,7 @@ def provider_login(email: str, conn=Depends(get_db)):
 
 
 # -----------------------------
-# TODAY'S JOBS
+# TODAY'S APPOINTMENTS
 # -----------------------------
 @router.get("/provider/{provider_id}/today")
 def provider_today(provider_id: int, conn=Depends(get_db)):
@@ -48,17 +48,16 @@ def provider_today(provider_id: int, conn=Depends(get_db)):
             a.start_time,
             a.end_time,
             a.status,
-            j.id AS job_id,
+            b.id AS booking_id,
+            b.services,
+            b.issue_description,
+            b.estimate_json,
             c.name AS client_name,
-            c.address AS client_address,
-            st.name AS service_name,
-            e.price
+            c.address AS client_address
         FROM appointments a
-        JOIN estimates e      ON a.estimate_id = e.id
-        JOIN jobs j           ON j.estimate_id = e.id
-        JOIN clients c        ON a.client_id = c.id
-        JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.provider_id = %s AND a.date = %s
+        JOIN bookings b ON a.booking_id = b.id
+        JOIN clients c ON a.client_id = c.id
+        WHERE a.provider_id = %s AND a.date = %s
         ORDER BY a.start_time ASC
     """, (provider_id, today))
 
@@ -67,11 +66,12 @@ def provider_today(provider_id: int, conn=Depends(get_db)):
     return [
         {
             "appointment_id": r["appointment_id"],
-            "job_id": r["job_id"],
+            "booking_id": r["booking_id"],
             "client_name": r["client_name"],
             "client_address": r["client_address"],
-            "service": r["service_name"],
-            "price": r["price"],
+            "services": r["services"],
+            "issue_description": r["issue_description"],
+            "estimate": r["estimate_json"],
             "start_time": r["start_time"],
             "end_time": r["end_time"],
             "status": r["status"],
@@ -82,7 +82,7 @@ def provider_today(provider_id: int, conn=Depends(get_db)):
 
 
 # -----------------------------
-# UPCOMING JOBS (next 7 days)
+# UPCOMING APPOINTMENTS (next 7 days)
 # -----------------------------
 @router.get("/provider/{provider_id}/upcoming")
 def provider_upcoming(provider_id: int, conn=Depends(get_db)):
@@ -96,16 +96,14 @@ def provider_upcoming(provider_id: int, conn=Depends(get_db)):
             a.id AS appointment_id,
             a.date,
             a.start_time,
-            j.id AS job_id,
-            c.name AS client_name,
-            st.name AS service_name,
-            e.price
+            b.id AS booking_id,
+            b.services,
+            b.issue_description,
+            c.name AS client_name
         FROM appointments a
-        JOIN estimates e      ON a.estimate_id = e.id
-        JOIN jobs j           ON j.estimate_id = e.id
-        JOIN clients c        ON a.client_id = c.id
-        JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.provider_id = %s
+        JOIN bookings b ON a.booking_id = b.id
+        JOIN clients c ON a.client_id = c.id
+        WHERE a.provider_id = %s
           AND a.date BETWEEN %s AND %s
         ORDER BY a.date ASC, a.start_time ASC
     """, (
@@ -119,10 +117,10 @@ def provider_upcoming(provider_id: int, conn=Depends(get_db)):
     return [
         {
             "appointment_id": r["appointment_id"],
-            "job_id": r["job_id"],
+            "booking_id": r["booking_id"],
             "client_name": r["client_name"],
-            "service": r["service_name"],
-            "price": r["price"],
+            "services": r["services"],
+            "issue_description": r["issue_description"],
             "date": r["date"],
             "start_time": r["start_time"]
         }
@@ -147,17 +145,16 @@ def provider_week(provider_id: int, conn=Depends(get_db)):
             a.start_time,
             a.end_time,
             a.status,
-            j.id AS job_id,
+            b.id AS booking_id,
+            b.services,
+            b.issue_description,
+            b.estimate_json,
             c.name AS client_name,
-            c.address AS client_address,
-            st.name AS service_name,
-            e.price
+            c.address AS client_address
         FROM appointments a
-        JOIN estimates e      ON a.estimate_id = e.id
-        JOIN jobs j           ON j.estimate_id = e.id
-        JOIN clients c        ON a.client_id = c.id
-        JOIN service_types st ON e.service_type_id = st.id
-        WHERE e.provider_id = %s
+        JOIN bookings b ON a.booking_id = b.id
+        JOIN clients c ON a.client_id = c.id
+        WHERE a.provider_id = %s
           AND a.date BETWEEN %s AND %s
         ORDER BY a.date ASC, a.start_time ASC
     """, (
@@ -176,11 +173,12 @@ def provider_week(provider_id: int, conn=Depends(get_db)):
 
         week[d].append({
             "appointment_id": r["appointment_id"],
-            "job_id": r["job_id"],
+            "booking_id": r["booking_id"],
             "client_name": r["client_name"],
             "client_address": r["client_address"],
-            "service": r["service_name"],
-            "price": r["price"],
+            "services": r["services"],
+            "issue_description": r["issue_description"],
+            "estimate": r["estimate_json"],
             "start_time": r["start_time"],
             "end_time": r["end_time"],
             "status": r["status"],
@@ -191,147 +189,139 @@ def provider_week(provider_id: int, conn=Depends(get_db)):
 
 
 # -----------------------------
-# JOB DETAILS
+# APPOINTMENT DETAILS
 # -----------------------------
-@router.get("/provider/job/{job_id}")
-def provider_job_details(job_id: int, conn=Depends(get_db)):
+@router.get("/provider/appointment/{appointment_id}")
+def provider_appointment_details(appointment_id: int, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
         SELECT 
-            j.id AS job_id,
-            j.status,
-            e.id AS estimate_id,
-            e.price,
-            e.duration_minutes,
-            e.linear_feet,
-            e.square_feet,
-            e.stories,
-            e.add_ons,
-            st.name AS service_name,
-            st.category AS service_category,
+            a.*,
+            b.services,
+            b.issue_description,
+            b.estimate_json,
             c.name AS client_name,
             c.phone AS client_phone,
             c.address AS client_address
-        FROM jobs j
-        JOIN estimates e ON j.estimate_id = e.id
-        JOIN service_types st ON e.service_type_id = st.id
-        JOIN clients c ON j.client_id = c.id
-        WHERE j.id = %s
-    """, (job_id,))
+        FROM appointments a
+        JOIN bookings b ON a.booking_id = b.id
+        JOIN clients c ON a.client_id = c.id
+        WHERE a.id = %s
+    """, (appointment_id,))
 
     r = cur.fetchone()
 
     if not r:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Appointment not found")
 
     return {
-        "job_id": r["job_id"],
-        "status": r["status"],
-        "service": r["service_name"],
-        "category": r["service_category"],
-        "price": r["price"],
-        "duration_minutes": r["duration_minutes"],
-        "linear_feet": r["linear_feet"],
-        "square_feet": r["square_feet"],
-        "stories": r["stories"],
-        "add_ons": json.loads(r["add_ons"]) if r["add_ons"] else {},
+        "appointment_id": r["id"],
+        "booking_id": r["booking_id"],
+        "provider_id": r["provider_id"],
         "client_name": r["client_name"],
         "client_phone": r["client_phone"],
         "client_address": r["client_address"],
+        "services": r["services"],
+        "issue_description": r["issue_description"],
+        "estimate": r["estimate_json"],
+        "date": r["date"],
+        "start_time": r["start_time"],
+        "end_time": r["end_time"],
+        "status": r["status"],
         "navigate_link": f"https://maps.google.com/?q={r['client_address']}"
     }
 
 
 # -----------------------------
-# START JOB
+# START APPOINTMENT
 # -----------------------------
-@router.put("/provider/job/{job_id}/start")
-def provider_start_job(job_id: int, conn=Depends(get_db)):
+@router.put("/provider/appointment/{appointment_id}/start")
+def provider_start_appointment(appointment_id: int, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
+    cur.execute("SELECT id FROM appointments WHERE id = %s", (appointment_id,))
     if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Appointment not found")
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute("""
-        UPDATE jobs
+        UPDATE appointments
         SET status = 'in_progress', updated_at = %s
         WHERE id = %s
-    """, (now, job_id))
+    """, (now, appointment_id))
 
     conn.commit()
 
-    return {"job_id": job_id, "status": "in_progress"}
+    return {"appointment_id": appointment_id, "status": "in_progress"}
 
 
 # -----------------------------
-# COMPLETE JOB
+# COMPLETE APPOINTMENT
 # -----------------------------
-@router.put("/provider/job/{job_id}/complete")
-def provider_complete_job(job_id: int, conn=Depends(get_db)):
+@router.put("/provider/appointment/{appointment_id}/complete")
+def provider_complete_appointment(appointment_id: int, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
+    cur.execute("SELECT id FROM appointments WHERE id = %s", (appointment_id,))
     if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Appointment not found")
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute("""
-        UPDATE jobs
+        UPDATE appointments
         SET status = 'completed', updated_at = %s
         WHERE id = %s
-    """, (now, job_id))
+    """, (now, appointment_id))
 
     conn.commit()
 
-    return {"job_id": job_id, "status": "completed"}
+    return {"appointment_id": appointment_id, "status": "completed"}
 
 
 # -----------------------------
-# UPLOAD JOB PHOTOS
+# UPLOAD APPOINTMENT PHOTOS
 # -----------------------------
-@router.post("/provider/job/{job_id}/photo")
-def provider_upload_photo(job_id: int, file: UploadFile = File(...)):
+@router.post("/provider/appointment/{appointment_id}/photo")
+def provider_upload_photo(appointment_id: int, file: UploadFile = File(...)):
     if not os.path.exists(PHOTO_DIR):
         os.makedirs(PHOTO_DIR)
 
-    filename = f"{job_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{file.filename}"
+    filename = f"{appointment_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{file.filename}"
     filepath = os.path.join(PHOTO_DIR, filename)
 
     with open(filepath, "wb") as f:
         f.write(file.file.read())
 
     return {
-        "job_id": job_id,
+        "appointment_id": appointment_id,
         "photo_path": filepath,
         "message": "Photo uploaded"
     }
 
 
 # -----------------------------
-# ADD JOB NOTES
+# ADD APPOINTMENT NOTES
 # -----------------------------
-@router.post("/provider/job/{job_id}/notes")
-def provider_add_notes(job_id: int, notes: str, conn=Depends(get_db)):
+@router.post("/provider/appointment/{appointment_id}/notes")
+def provider_add_notes(appointment_id: int, notes: str, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
+    cur.execute("SELECT id FROM appointments WHERE id = %s", (appointment_id,))
     if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Appointment not found")
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute("""
-        INSERT INTO job_notes (job_id, notes, created_at)
+        INSERT INTO appointment_notes (appointment_id, notes, created_at)
         VALUES (%s, %s, %s)
         RETURNING id
-    """, (job_id, notes, now))
+    """, (appointment_id, notes, now))
 
     note_id = cur.fetchone()["id"]
     conn.commit()
 
-    return {"job_id": job_id, "note_id": note_id, "notes": notes, "message": "Notes added"}
+    return {"appointment_id": appointment_id, "note_id": note_id, "notes": notes, "message": "Notes added"}

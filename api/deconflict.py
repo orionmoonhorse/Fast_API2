@@ -7,7 +7,8 @@ import psycopg2.extras
 def provider_exists(conn, provider_id):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     q = "SELECT id FROM providers WHERE id = %s"
-    return cur.execute(q, (provider_id,)) or cur.fetchone() is not None
+    cur.execute(q, (provider_id,))
+    return cur.fetchone() is not None
 
 
 def generate_availability(conn, provider_id, date, duration_minutes):
@@ -129,8 +130,7 @@ def overlaps(conn, provider_id, start_dt, end_dt):
     q = """
         SELECT a.date, a.start_time, a.end_time
         FROM appointments a
-        JOIN estimates e ON a.estimate_id = e.id
-        WHERE e.provider_id = %s
+        WHERE a.provider_id = %s
         AND a.status != 'cancelled'
     """
     cur.execute(q, (provider_id,))
@@ -158,8 +158,7 @@ def buffer_conflict(conn, provider_id, start_dt, end_dt):
     q = """
         SELECT a.date, a.start_time, a.end_time
         FROM appointments a
-        JOIN estimates e ON a.estimate_id = e.id
-        WHERE e.provider_id = %s
+        WHERE a.provider_id = %s
         AND a.status != 'cancelled'
     """
     cur.execute(q, (provider_id,))
@@ -187,8 +186,7 @@ def travel_conflict(conn, provider_id, start_dt, end_dt):
     q = """
         SELECT a.date, a.start_time, a.end_time
         FROM appointments a
-        JOIN estimates e ON a.estimate_id = e.id
-        WHERE e.provider_id = %s
+        WHERE a.provider_id = %s
         AND a.status != 'cancelled'
     """
     cur.execute(q, (provider_id,))

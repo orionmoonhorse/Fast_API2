@@ -1,4 +1,6 @@
+# ============================
 # Python cache and virtual environments
+# ============================
 __pycache__/
 *.pyc
 *.pyo
@@ -6,28 +8,65 @@ __pycache__/
 venv/
 env/
 
+# ============================
 # Node dependencies
+# ============================
 node_modules/
 
+# ============================
 # Environment variables
+# ============================
 .env
 *.env
 
+# ============================
 # Logs
+# ============================
 *.log
 
+# ============================
 # OS junk
+# ============================
 .DS_Store
 Thumbs.db
 
+# ============================
 # Build artifacts
+# ============================
 dist/
 build/
 
+# ============================
 # Frontend build output
+# ============================
 frontend/dist/
 frontend/node_modules/
 
+# ============================
 # Editor settings
+# ============================
 .vscode/
 .idea/
+
+# ============================
+# Provider / Appointment Photos
+# ============================
+appointment_photos/
+job_photos/
+
+# ============================
+# Local SMS / Email bridge artifacts
+# ============================
+sms_bridge_logs/
+email_bridge_logs/
+
+# ============================
+# Python packaging
+# ============================
+*.egg-info/
+.eggs/
+
+# ============================
+# Cache from tools
+# ============================
+.cache/

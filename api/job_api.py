@@ -1,4 +1,4 @@
-# api/job_api.py
+# api/job_api.py  (updated for washer/dryer system)
 
 from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
@@ -9,95 +9,90 @@ router = APIRouter()
 
 
 # -----------------------------
-# CREATE JOB FROM ESTIMATE
+# CREATE APPOINTMENT FROM BOOKING
 # -----------------------------
-@router.post("/job/create")
-def create_job(estimate_id: int, conn=Depends(get_db)):
+@router.post("/appointment/create")
+def create_appointment(booking_id: int, date: str, start_time: str, end_time: str, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Fetch estimate
+    # Validate booking exists
     cur.execute("""
-        SELECT client_id, service_type_id
-        FROM estimates
+        SELECT client_id
+        FROM bookings
         WHERE id = %s
-    """, (estimate_id,))
-    est = cur.fetchone()
+    """, (booking_id,))
+    booking = cur.fetchone()
 
-    if not est:
-        raise HTTPException(status_code=404, detail="Estimate not found")
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
 
-    client_id = est["client_id"]
-
-    # Create job
+    client_id = booking["client_id"]
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Create appointment
     cur.execute("""
-        INSERT INTO jobs (estimate_id, client_id, status, created_at, updated_at)
-        VALUES (%s, %s, 'pending', %s, %s)
+        INSERT INTO appointments (booking_id, client_id, date, start_time, end_time, status, created_at)
+        VALUES (%s, %s, %s, %s, %s, 'scheduled', %s)
         RETURNING id
-    """, (estimate_id, client_id, now, now))
+    """, (booking_id, client_id, date, start_time, end_time, now))
 
-    job_id = cur.fetchone()["id"]
+    appt_id = cur.fetchone()["id"]
     conn.commit()
 
     return {
-        "job_id": job_id,
-        "estimate_id": estimate_id,
+        "appointment_id": appt_id,
+        "booking_id": booking_id,
         "client_id": client_id,
-        "status": "pending",
-        "message": "Job created and ready for scheduling"
+        "status": "scheduled",
+        "message": "Appointment created and ready for provider assignment"
     }
 
 
 # -----------------------------
-# GET JOB DETAILS
+# GET APPOINTMENT DETAILS
 # -----------------------------
-@router.get("/job/{job_id}")
-def get_job(job_id: int, conn=Depends(get_db)):
+@router.get("/appointment/{appointment_id}")
+def get_appointment(appointment_id: int, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("""
-        SELECT j.*, 
-               e.linear_feet, e.square_feet, e.stories,
-               e.add_ons, e.price, e.duration_minutes,
-               st.name AS service_name, st.category AS service_category
-        FROM jobs j
-        JOIN estimates e      ON j.estimate_id = e.id
-        JOIN service_types st ON e.service_type_id = st.id
-        WHERE j.id = %s
-    """, (job_id,))
+        SELECT a.*, 
+               b.services,
+               b.issue_description,
+               b.estimate_json
+        FROM appointments a
+        JOIN bookings b ON a.booking_id = b.id
+        WHERE a.id = %s
+    """, (appointment_id,))
 
     row = cur.fetchone()
 
     if not row:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Appointment not found")
 
     return {
-        "job_id": row["id"],
-        "status": row["status"],
-        "service": row["service_name"],
-        "category": row["service_category"],
-        "price": row["price"],
-        "duration_minutes": row["duration_minutes"],
-        "linear_feet": row["linear_feet"],
-        "square_feet": row["square_feet"],
-        "stories": row["stories"],
-        "add_ons": row["add_ons"],
-        "estimate_id": row["estimate_id"],
+        "appointment_id": row["id"],
+        "booking_id": row["booking_id"],
         "client_id": row["client_id"],
         "provider_id": row["provider_id"],
+        "date": row["date"],
+        "start_time": row["start_time"],
+        "end_time": row["end_time"],
+        "status": row["status"],
+        "services": row["services"],
+        "issue_description": row["issue_description"],
+        "estimate": row["estimate_json"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"]
     }
 
 
 # -----------------------------
-# UPDATE JOB STATUS
+# UPDATE APPOINTMENT STATUS
 # -----------------------------
-@router.put("/job/{job_id}/status")
-def update_job_status(job_id: int, status: str, conn=Depends(get_db)):
+@router.put("/appointment/{appointment_id}/status")
+def update_appointment_status(appointment_id: int, status: str, conn=Depends(get_db)):
     valid_statuses = [
-        "pending",
         "scheduled",
         "in_progress",
         "completed",
@@ -109,38 +104,38 @@ def update_job_status(job_id: int, status: str, conn=Depends(get_db)):
 
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
+    cur.execute("SELECT id FROM appointments WHERE id = %s", (appointment_id,))
     if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Appointment not found")
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute("""
-        UPDATE jobs
+        UPDATE appointments
         SET status = %s, updated_at = %s
         WHERE id = %s
-    """, (status, now, job_id))
+    """, (status, now, appointment_id))
 
     conn.commit()
 
     return {
-        "job_id": job_id,
+        "appointment_id": appointment_id,
         "status": status,
-        "message": "Job status updated"
+        "message": "Appointment status updated"
     }
 
 
 # -----------------------------
-# ASSIGN PROVIDER TO JOB
+# ASSIGN PROVIDER TO APPOINTMENT
 # -----------------------------
-@router.put("/job/{job_id}/assign")
-def assign_provider(job_id: int, provider_id: int, conn=Depends(get_db)):
+@router.put("/appointment/{appointment_id}/assign")
+def assign_provider(appointment_id: int, provider_id: int, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Validate job
-    cur.execute("SELECT id FROM jobs WHERE id = %s", (job_id,))
+    # Validate appointment
+    cur.execute("SELECT id FROM appointments WHERE id = %s", (appointment_id,))
     if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Appointment not found")
 
     # Validate provider
     cur.execute("SELECT id FROM providers WHERE id = %s", (provider_id,))
@@ -150,15 +145,15 @@ def assign_provider(job_id: int, provider_id: int, conn=Depends(get_db)):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute("""
-        UPDATE jobs
+        UPDATE appointments
         SET provider_id = %s, updated_at = %s
         WHERE id = %s
-    """, (provider_id, now, job_id))
+    """, (provider_id, now, appointment_id))
 
     conn.commit()
 
     return {
-        "job_id": job_id,
+        "appointment_id": appointment_id,
         "provider_id": provider_id,
-        "message": "Provider assigned to job"
+        "message": "Provider assigned to appointment"
     }
