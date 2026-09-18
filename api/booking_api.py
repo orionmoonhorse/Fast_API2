@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Literal
 import psycopg2.extras
+from datetime import datetime
 
 from db import get_db
 from api.sms import send_sms
@@ -14,9 +15,12 @@ router = APIRouter()
 # MODEL
 # ============================
 class BookingPayload(BaseModel):
-    client_id: int
+    name: str
+    phone: str
+    email: str | None = None
+    service_address: str | None = None
     services: List[Literal["diagnostic", "washer", "dryer"]]
-    issue_description: str | None = None   # ⭐ Notes optional
+    issue_description: str | None = None
     date: str
     time: str
 
@@ -46,13 +50,11 @@ def get_snapshot_ranges():
 # ESTIMATOR LOGIC
 # ============================
 def estimate_cost(services: list, issue_description: str | None):
-    # ⭐ Prevent NoneType errors and allow empty notes
     issue_description = (issue_description or "").lower()
 
     diagnostic_min = 79
     diagnostic_max = 129
 
-    # If diagnostic is selected, override everything
     if "diagnostic" in services:
         return {
             "type": "diagnostic_only",
@@ -67,7 +69,6 @@ def estimate_cost(services: list, issue_description: str | None):
             "note": "Diagnostic selected — repair pricing hidden until after diagnosis."
         }
 
-    # Otherwise calculate repair costs
     washer_min = 129
     washer_max = 299
     dryer_min = 129
@@ -133,12 +134,26 @@ def estimate_cost(services: list, issue_description: str | None):
 def create_booking(payload: BookingPayload, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Fetch client
-    cur.execute("SELECT * FROM clients WHERE id = %s", (payload.client_id,))
-    client = cur.fetchone()
+    # Auto-create or reuse client
+    cur.execute("SELECT id FROM clients WHERE phone = %s LIMIT 1", (payload.phone,))
+    existing = cur.fetchone()
 
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    if existing:
+        client_id = existing["id"]
+    else:
+        cur.execute("""
+            INSERT INTO clients (name, phone, email, address, notes, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            payload.name,
+            payload.phone,
+            payload.email,
+            payload.service_address,
+            payload.issue_description,
+            datetime.now().isoformat()
+        ))
+        client_id = cur.fetchone()["id"]
 
     # Compute estimate
     estimate = estimate_cost(payload.services, payload.issue_description)
@@ -149,7 +164,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING id
     """, (
-        payload.client_id,
+        client_id,
         payload.services,
         payload.issue_description,
         payload.date,
@@ -163,23 +178,23 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
     # SMS confirmation
     if estimate["type"] == "diagnostic_only":
         sms_message = (
-            f"Hi {client['name']}! Your diagnostic appointment is scheduled for "
+            f"Hi {payload.name}! Your diagnostic appointment is scheduled for "
             f"{payload.date} at {payload.time}. Diagnostic fee is "
             f"${estimate['diagnostic_min']}–${estimate['diagnostic_max']} estimated."
         )
     else:
         sms_message = (
-            f"Hi {client['name']}! Your repair appointment is scheduled for "
+            f"Hi {payload.name}! Your repair appointment is scheduled for "
             f"{payload.date} at {payload.time}. Estimated range: "
             f"{estimate['total_estimate']['estimated']}."
         )
 
-    send_sms(client["phone"], sms_message)
+    send_sms(payload.phone, sms_message)
 
     return {
         "booking_id": booking_id,
         "estimate": estimate,
         "snapshot": get_snapshot_ranges(),
         "services": payload.services,
-        "client": client
+        "client_id": client_id
     }
