@@ -7,7 +7,7 @@ import psycopg2.pool
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # -----------------------------
-# CONNECTION POOL (recommended)
+# CONNECTION POOL
 # -----------------------------
 pool = psycopg2.pool.SimpleConnectionPool(
     minconn=1,
@@ -20,17 +20,13 @@ pool = psycopg2.pool.SimpleConnectionPool(
     keepalives_count=5
 )
 
+# -----------------------------
+# FASTAPI DEPENDENCY (CORRECT)
+# -----------------------------
 def get_db():
+    conn = pool.getconn()
+    conn.autocommit = True
     try:
-        conn = pool.getconn()
-        conn.autocommit = True
-        return conn
-    except Exception as e:
-        print("DB connection error:", e)
-        raise
-
-def release_db(conn):
-    try:
+        yield conn
+    finally:
         pool.putconn(conn)
-    except Exception as e:
-        print("DB release error:", e)
