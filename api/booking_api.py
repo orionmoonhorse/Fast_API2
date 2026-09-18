@@ -1,7 +1,7 @@
-# api/booking_api.py
+# booking_api.py
 
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import List, Literal
 import psycopg2.extras
 
@@ -16,7 +16,7 @@ router = APIRouter()
 class BookingPayload(BaseModel):
     client_id: int
     services: List[Literal["diagnostic", "washer", "dryer"]]
-    issue_description: str = Field(..., min_length=5)
+    issue_description: str | None = None   # ⭐ Notes optional
     date: str
     time: str
 
@@ -45,7 +45,10 @@ def get_snapshot_ranges():
 # ============================
 # ESTIMATOR LOGIC
 # ============================
-def estimate_cost(services: list, issue_description: str):
+def estimate_cost(services: list, issue_description: str | None):
+    # ⭐ Prevent NoneType errors and allow empty notes
+    issue_description = (issue_description or "").lower()
+
     diagnostic_min = 79
     diagnostic_max = 129
 
@@ -82,7 +85,7 @@ def estimate_cost(services: list, issue_description: str):
 
     additional = sum(
         price for keyword, price in issue_keywords.items()
-        if keyword in issue_description.lower()
+        if keyword in issue_description
     )
 
     breakdown = {}
