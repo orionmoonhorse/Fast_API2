@@ -1,7 +1,7 @@
 # availability_api.py
 
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from db import get_db
 import psycopg2.extras
 
@@ -9,15 +9,19 @@ router = APIRouter()
 
 # --- SAFE TIME PARSER ---
 def parse_time_safe(t):
-    if t is None:
+    if not t:
         return None
 
-    t = str(t).strip()
+    t = str(t).strip().upper()
+
+    # Try AM/PM formats first
+    try:
+        return datetime.strptime(t, "%I:%M %p")
+    except:
+        pass
 
     # Normalize formats: "9:00", "09:00:00", "17:00:00.000000"
     parts = t.split(":")
-
-    # If seconds exist, strip them
     if len(parts) >= 3:
         t = f"{parts[0]}:{parts[1]}"
 
@@ -25,6 +29,7 @@ def parse_time_safe(t):
     if len(parts[0]) == 1:
         t = f"0{parts[0]}:{parts[1]}"
 
+    # Try 24-hour format
     try:
         return datetime.strptime(t, "%H:%M")
     except:
@@ -47,91 +52,100 @@ def get_provider_hours(conn, provider_id: int, weekday: int):
 
 @router.get("/availability")
 def get_availability(date: str, conn=Depends(get_db)):
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    weekday = datetime.strptime(date, "%Y-%m-%d").weekday()
-    duration = 120
-    provider_id = 1
-
-    # Provider hours
-    provider_hours = get_provider_hours(conn, provider_id, weekday)
-
-    # Default hours
-    start = parse_time_safe("09:00")
-    end = parse_time_safe("17:00")
-
-    if provider_hours:
-        ph_start = parse_time_safe(provider_hours["start_time"])
-        ph_end = parse_time_safe(provider_hours["end_time"])
-
-        # Only override if valid
-        if ph_start and ph_end and ph_start < ph_end:
-            start, end = ph_start, ph_end
-
-    base_start, base_end = start, end
-
-    # Rules
-    cur.execute("""
-        SELECT *
-        FROM availability_rules
-        WHERE date = %s
-    """, (date,))
-    rules = cur.fetchall()
-
-    # Full-day block (only if explicitly set)
-    for r in rules:
-        if r["is_blocked"] == 1 and r["start_time"] is None and r["end_time"] is None:
+    try:
+        # Validate date format
+        try:
+            date_obj = datetime.strptime(date, "%Y-%m-%d")
+        except:
             return []
 
-    # Generate slots
-    slots = []
-    current = base_start
+        weekday = date_obj.weekday()
+        duration = 120
+        provider_id = 1
 
-    while current + timedelta(minutes=duration) <= base_end:
-        slot_start = current
-        slot_end = current + timedelta(minutes=duration)
-        slots.append((slot_start, slot_end))
-        current += timedelta(minutes=duration)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Rule blocking
-    def slot_blocked(slot_start, slot_end):
+        # Provider hours
+        provider_hours = get_provider_hours(conn, provider_id, weekday)
+
+        # Default hours
+        start = parse_time_safe("09:00")
+        end = parse_time_safe("17:00")
+
+        if provider_hours:
+            ph_start = parse_time_safe(provider_hours.get("start_time"))
+            ph_end = parse_time_safe(provider_hours.get("end_time"))
+
+            if ph_start and ph_end and ph_start < ph_end:
+                start, end = ph_start, ph_end
+
+        base_start, base_end = start, end
+
+        # Rules
+        cur.execute("""
+            SELECT *
+            FROM availability_rules
+            WHERE date = %s
+        """, (date,))
+        rules = cur.fetchall()
+
+        # Full-day block
         for r in rules:
-            if r["is_blocked"] != 1:
-                continue
+            if r.get("is_blocked") == 1 and not r.get("start_time") and not r.get("end_time"):
+                return []
 
-            rule_start = parse_time_safe(r["start_time"])
-            rule_end = parse_time_safe(r["end_time"])
+        # Generate slots
+        slots = []
+        current = base_start
 
-            if rule_start and rule_end:
-                if slot_start < rule_end and slot_end > rule_start:
-                    return True
+        while current + timedelta(minutes=duration) <= base_end:
+            slot_start = current
+            slot_end = current + timedelta(minutes=duration)
+            slots.append((slot_start, slot_end))
+            current += timedelta(minutes=duration)
 
-        return False
+        # Rule blocking
+        def slot_blocked(slot_start, slot_end):
+            for r in rules:
+                if r.get("is_blocked") != 1:
+                    continue
 
-    slots = [(s, e) for (s, e) in slots if not slot_blocked(s, e)]
+                rule_start = parse_time_safe(r.get("start_time"))
+                rule_end = parse_time_safe(r.get("end_time"))
 
-    # Appointments
-    cur.execute("""
-        SELECT start_time, end_time
-        FROM appointments
-        WHERE date = %s
-          AND provider_id = %s
-          AND status != 'cancelled'
-    """, (date, provider_id))
-    appts = cur.fetchall()
+                if rule_start and rule_end:
+                    if slot_start < rule_end and slot_end > rule_start:
+                        return True
 
-    def slot_conflicts(slot_start, slot_end):
-        for a in appts:
-            a_start = parse_time_safe(a["start_time"])
-            a_end = parse_time_safe(a["end_time"])
+            return False
 
-            # Only check valid appointments
-            if a_start and a_end:
-                if slot_start < a_end and slot_end > a_start:
-                    return True
+        slots = [(s, e) for (s, e) in slots if not slot_blocked(s, e)]
 
-        return False
+        # Appointments
+        cur.execute("""
+            SELECT start_time, end_time
+            FROM appointments
+            WHERE date = %s
+              AND provider_id = %s
+              AND status != 'cancelled'
+        """, (date, provider_id))
+        appts = cur.fetchall()
 
-    slots = [(s, e) for (s, e) in slots if not slot_conflicts(s, e)]
+        def slot_conflicts(slot_start, slot_end):
+            for a in appts:
+                a_start = parse_time_safe(a.get("start_time"))
+                a_end = parse_time_safe(a.get("end_time"))
 
-    return [format_time(s) for (s, e) in slots]
+                if a_start and a_end:
+                    if slot_start < a_end and slot_end > a_start:
+                        return True
+
+            return False
+
+        slots = [(s, e) for (s, e) in slots if not slot_conflicts(s, e)]
+
+        return [format_time(s) for (s, e) in slots]
+
+    except Exception as e:
+        print("AVAILABILITY ERROR:", e)
+        return []
