@@ -48,6 +48,38 @@ def get_snapshot_ranges():
 
 
 # ============================
+# SERVICE LABEL MAPPER
+# ============================
+def map_service_labels(services: list):
+    mapped = []
+
+    if "washer" in services:
+        mapped.append("Washer Repair")
+
+    if "dryer" in services:
+        mapped.append("Dryer Repair")
+
+    if "diagnostic" in services:
+        if "washer" in services:
+            mapped.append("Washer Diagnostic")
+        if "dryer" in services:
+            mapped.append("Dryer Diagnostic")
+        if "washer" not in services and "dryer" not in services:
+            mapped.append("General Diagnostic")
+
+    return mapped
+
+
+# ============================
+# PRICE RANGE EXTRACTOR
+# ============================
+def extract_price_ranges(estimate: dict):
+    if estimate["type"] == "diagnostic_only":
+        return estimate["diagnostic_min"], estimate["diagnostic_max"]
+    return estimate["total_estimate"]["min"], estimate["total_estimate"]["max"]
+
+
+# ============================
 # ESTIMATOR LOGIC
 # ============================
 def estimate_cost(services: list, issue_description: str | None):
@@ -175,23 +207,32 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
 
     booking_id = cur.fetchone()["id"]
 
-    # ⭐ Insert into daily_appointments
+    # ⭐ Build readable service labels
+    full_labels = map_service_labels(payload.services)
+
+    # ⭐ Extract min/max pricing
+    price_min, price_max = extract_price_ranges(estimate)
+
+    # ⭐ Insert into daily_appointments with pricing + labels
     cur.execute("""
         INSERT INTO daily_appointments (
             booking_id, client_id, name, phone, service_address,
-            services, issue_description, date, time
+            services, issue_description, date, time,
+            price_min, price_max
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         booking_id,
         client_id,
         payload.name,
         payload.phone,
         payload.service_address,
-        payload.services,
+        full_labels,
         payload.issue_description,
         payload.date,
-        payload.time
+        payload.time,
+        price_min,
+        price_max
     ))
 
     conn.commit()
@@ -216,7 +257,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         "booking_id": booking_id,
         "estimate": estimate,
         "snapshot": get_snapshot_ranges(),
-        "services": payload.services,
+        "services": full_labels,
         "client_id": client_id
     }
 
