@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import List, Literal
 import psycopg2.extras
 from datetime import datetime
-import json   # ⭐ REQUIRED
+import json
 
 from db import get_db
 from api.sms import send_sms
@@ -129,7 +129,7 @@ def estimate_cost(services: list, issue_description: str | None):
 
 
 # ============================
-# ROUTE
+# ROUTE — CREATE BOOKING
 # ============================
 @router.post("/booking/create")
 def create_booking(payload: BookingPayload, conn=Depends(get_db)):
@@ -159,7 +159,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
     # Compute estimate
     estimate = estimate_cost(payload.services, payload.issue_description)
 
-    # Insert booking (⭐ FIXED JSONB)
+    # Insert booking
     cur.execute("""
         INSERT INTO bookings (client_id, services, issue_description, date, time, estimate_json)
         VALUES (%s, %s, %s, %s, %s, %s)
@@ -170,10 +170,30 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         payload.issue_description,
         payload.date,
         payload.time,
-        json.dumps(estimate)   # ⭐ REQUIRED FIX
+        json.dumps(estimate)
     ))
 
     booking_id = cur.fetchone()["id"]
+
+    # ⭐ Insert into daily_appointments
+    cur.execute("""
+        INSERT INTO daily_appointments (
+            booking_id, client_id, name, phone, service_address,
+            services, issue_description, date, time
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        booking_id,
+        client_id,
+        payload.name,
+        payload.phone,
+        payload.service_address,
+        payload.services,
+        payload.issue_description,
+        payload.date,
+        payload.time
+    ))
+
     conn.commit()
 
     # SMS confirmation
@@ -199,3 +219,18 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         "services": payload.services,
         "client_id": client_id
     }
+
+
+# ============================
+# ROUTE — DAILY APPOINTMENTS
+# ============================
+@router.get("/appointments/daily")
+def get_daily_appointments(date: str, conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT *
+        FROM daily_appointments
+        WHERE date = %s
+        ORDER BY time
+    """, (date,))
+    return cur.fetchall()
