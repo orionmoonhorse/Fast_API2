@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from typing import List, Literal
 import psycopg2.extras
 from datetime import datetime
+import json   # ⭐ REQUIRED
 
 from db import get_db
 from api.sms import send_sms
@@ -158,7 +159,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
     # Compute estimate
     estimate = estimate_cost(payload.services, payload.issue_description)
 
-    # Insert booking
+    # Insert booking (⭐ FIXED JSONB)
     cur.execute("""
         INSERT INTO bookings (client_id, services, issue_description, date, time, estimate_json)
         VALUES (%s, %s, %s, %s, %s, %s)
@@ -169,7 +170,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         payload.issue_description,
         payload.date,
         payload.time,
-        estimate
+        json.dumps(estimate)   # ⭐ REQUIRED FIX
     ))
 
     booking_id = cur.fetchone()["id"]
