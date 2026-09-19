@@ -1,7 +1,7 @@
 # availability_api.py
 
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from db import get_db
 import psycopg2.extras
 
@@ -60,7 +60,6 @@ def get_availability(date: str, conn=Depends(get_db)):
             return []
 
         weekday = date_obj.weekday()
-        duration = 120
         provider_id = 1
 
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -94,15 +93,24 @@ def get_availability(date: str, conn=Depends(get_db)):
             if r.get("is_blocked") == 1 and not r.get("start_time") and not r.get("end_time"):
                 return []
 
-        # Generate slots
-        slots = []
-        current = base_start
+        # ⭐ Load slot definitions from Postgres
+        cur.execute("""
+            SELECT slot_time, duration
+            FROM time_slots
+            WHERE provider_id = %s AND active = TRUE
+            ORDER BY slot_time
+        """, (provider_id,))
 
-        while current + timedelta(minutes=duration) <= base_end:
-            slot_start = current
-            slot_end = current + timedelta(minutes=duration)
-            slots.append((slot_start, slot_end))
-            current += timedelta(minutes=duration)
+        rows = cur.fetchall()
+
+        slots = []
+        for row in rows:
+            slot_start = parse_time_safe(row["slot_time"])
+            slot_end = slot_start + timedelta(minutes=row["duration"])
+
+            # Respect provider hours
+            if slot_start >= base_start and slot_end <= base_end:
+                slots.append((slot_start, slot_end))
 
         # Rule blocking
         def slot_blocked(slot_start, slot_end):
@@ -121,7 +129,7 @@ def get_availability(date: str, conn=Depends(get_db)):
 
         slots = [(s, e) for (s, e) in slots if not slot_blocked(s, e)]
 
-        # Appointments
+        # Appointment conflicts
         cur.execute("""
             SELECT start_time, end_time
             FROM appointments
@@ -144,6 +152,7 @@ def get_availability(date: str, conn=Depends(get_db)):
 
         slots = [(s, e) for (s, e) in slots if not slot_conflicts(s, e)]
 
+        # ⭐ Return final available slots
         return [format_time(s) for (s, e) in slots]
 
     except Exception as e:
