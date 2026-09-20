@@ -207,13 +207,13 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
 
     booking_id = cur.fetchone()["id"]
 
-    # ⭐ Build readable service labels
+    # Build readable service labels
     full_labels = map_service_labels(payload.services)
 
-    # ⭐ Extract min/max pricing
+    # Extract min/max pricing
     price_min, price_max = extract_price_ranges(estimate)
 
-    # ⭐ Insert into daily_appointments with pricing + labels
+    # Insert into daily_appointments
     cur.execute("""
         INSERT INTO daily_appointments (
             booking_id, client_id, name, phone, service_address,
@@ -275,3 +275,44 @@ def get_daily_appointments(date: str, conn=Depends(get_db)):
         ORDER BY time
     """, (date,))
     return cur.fetchall()
+
+
+# ============================
+# ROUTE — AVAILABILITY (FINAL FIX)
+# ============================
+@router.get("/availability")
+def get_availability(date: str, conn=Depends(get_db)):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # 1️⃣ Load all active slots
+    cur.execute("""
+        SELECT slot_time
+        FROM slots
+        WHERE active = TRUE
+        ORDER BY slot_time
+    """)
+    all_slots = [row["slot_time"].strftime("%H:%M") for row in cur.fetchall()]
+
+    # 2️⃣ Load booked slots from bookings
+    cur.execute("""
+        SELECT time
+        FROM bookings
+        WHERE date = %s
+    """, (date,))
+    booked_from_bookings = [row["time"] for row in cur.fetchall()]
+
+    # 3️⃣ Load booked slots from daily_appointments
+    cur.execute("""
+        SELECT time
+        FROM daily_appointments
+        WHERE date = %s
+    """, (date,))
+    booked_from_daily = [row["time"] for row in cur.fetchall()]
+
+    # 4️⃣ Combine booked slots
+    booked_slots = set(booked_from_bookings + booked_from_daily)
+
+    # 5️⃣ Remove booked slots
+    open_slots = [slot for slot in all_slots if slot not in booked_slots]
+
+    return open_slots

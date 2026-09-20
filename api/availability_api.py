@@ -40,16 +40,6 @@ def format_time(dt: datetime) -> str:
     return dt.strftime("%H:%M")
 
 
-def get_provider_hours(conn, provider_id: int, weekday: int):
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("""
-        SELECT start_time, end_time
-        FROM provider_hours
-        WHERE provider_id = %s AND day_of_week = %s
-    """, (provider_id, weekday))
-    return cur.fetchone()
-
-
 @router.get("/availability")
 def get_availability(date: str, conn=Depends(get_db)):
     try:
@@ -59,39 +49,8 @@ def get_availability(date: str, conn=Depends(get_db)):
         except:
             return []
 
-        weekday = date_obj.weekday()
         provider_id = 1
-
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-        # Provider hours
-        provider_hours = get_provider_hours(conn, provider_id, weekday)
-
-        # Default hours
-        start = parse_time_safe("09:00")
-        end = parse_time_safe("17:00")
-
-        if provider_hours:
-            ph_start = parse_time_safe(provider_hours.get("start_time"))
-            ph_end = parse_time_safe(provider_hours.get("end_time"))
-
-            if ph_start and ph_end and ph_start < ph_end:
-                start, end = ph_start, ph_end
-
-        base_start, base_end = start, end
-
-        # Rules
-        cur.execute("""
-            SELECT *
-            FROM availability_rules
-            WHERE date = %s
-        """, (date,))
-        rules = cur.fetchall()
-
-        # Full-day block
-        for r in rules:
-            if r.get("is_blocked") == 1 and not r.get("start_time") and not r.get("end_time"):
-                return []
 
         # ⭐ Load slot definitions from Postgres
         cur.execute("""
@@ -100,60 +59,42 @@ def get_availability(date: str, conn=Depends(get_db)):
             WHERE provider_id = %s AND active = TRUE
             ORDER BY slot_time
         """, (provider_id,))
-
         rows = cur.fetchall()
 
+        # Build slot ranges
         slots = []
         for row in rows:
             slot_start = parse_time_safe(row["slot_time"])
             slot_end = slot_start + timedelta(minutes=row["duration"])
+            slots.append((slot_start, slot_end))
 
-            # Respect provider hours
-            if slot_start >= base_start and slot_end <= base_end:
-                slots.append((slot_start, slot_end))
-
-        # Rule blocking
-        def slot_blocked(slot_start, slot_end):
-            for r in rules:
-                if r.get("is_blocked") != 1:
-                    continue
-
-                rule_start = parse_time_safe(r.get("start_time"))
-                rule_end = parse_time_safe(r.get("end_time"))
-
-                if rule_start and rule_end:
-                    if slot_start < rule_end and slot_end > rule_start:
-                        return True
-
-            return False
-
-        slots = [(s, e) for (s, e) in slots if not slot_blocked(s, e)]
-
-        # Appointment conflicts
+        # ⭐ Get booked slots from bookings
         cur.execute("""
-            SELECT start_time, end_time
-            FROM appointments
+            SELECT time
+            FROM bookings
             WHERE date = %s
-              AND provider_id = %s
-              AND status != 'cancelled'
-        """, (date, provider_id))
-        appts = cur.fetchall()
+        """, (date,))
+        booked_from_bookings = [row["time"] for row in cur.fetchall()]
 
-        def slot_conflicts(slot_start, slot_end):
-            for a in appts:
-                a_start = parse_time_safe(a.get("start_time"))
-                a_end = parse_time_safe(a.get("end_time"))
+        # ⭐ Get booked slots from daily_appointments
+        cur.execute("""
+            SELECT time
+            FROM daily_appointments
+            WHERE date = %s
+        """, (date,))
+        booked_from_daily = [row["time"] for row in cur.fetchall()]
 
-                if a_start and a_end:
-                    if slot_start < a_end and slot_end > a_start:
-                        return True
+        # ⭐ Combine booked slots
+        booked_slots = set(booked_from_bookings + booked_from_daily)
 
-            return False
+        # ⭐ Remove booked slots
+        open_slots = []
+        for slot_start, slot_end in slots:
+            slot_str = format_time(slot_start)
+            if slot_str not in booked_slots:
+                open_slots.append(slot_str)
 
-        slots = [(s, e) for (s, e) in slots if not slot_conflicts(s, e)]
-
-        # ⭐ Return final available slots
-        return [format_time(s) for (s, e) in slots]
+        return open_slots
 
     except Exception as e:
         print("AVAILABILITY ERROR:", e)
