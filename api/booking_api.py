@@ -284,7 +284,7 @@ def get_daily_appointments(date: str, conn=Depends(get_db)):
 def get_availability(date: str, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # 1️⃣ Load all active slots
+    # Load all active slots
     cur.execute("""
         SELECT slot_time
         FROM slots
@@ -293,7 +293,7 @@ def get_availability(date: str, conn=Depends(get_db)):
     """)
     all_slots = [row["slot_time"].strftime("%H:%M") for row in cur.fetchall()]
 
-    # 2️⃣ Load booked slots from bookings
+    # Load booked slots from bookings
     cur.execute("""
         SELECT time
         FROM bookings
@@ -301,7 +301,7 @@ def get_availability(date: str, conn=Depends(get_db)):
     """, (date,))
     booked_from_bookings = [row["time"] for row in cur.fetchall()]
 
-    # 3️⃣ Load booked slots from daily_appointments
+    # Load booked slots from daily_appointments
     cur.execute("""
         SELECT time
         FROM daily_appointments
@@ -309,10 +309,10 @@ def get_availability(date: str, conn=Depends(get_db)):
     """, (date,))
     booked_from_daily = [row["time"] for row in cur.fetchall()]
 
-    # 4️⃣ Combine booked slots
+    # Combine booked slots
     booked_slots = set(booked_from_bookings + booked_from_daily)
 
-    # 5️⃣ Remove booked slots
+    # Remove booked slots
     open_slots = [slot for slot in all_slots if slot not in booked_slots]
 
     return open_slots
