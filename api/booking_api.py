@@ -1,3 +1,5 @@
+# booking_api.py
+
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
 from typing import List, Literal
@@ -124,7 +126,6 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
             raise HTTPException(status_code=400, detail="Invalid date or time format.")
 
         # 2. STRICT OVERLAP CHECK
-        # Fixed comparison types by passing pure time objects (.time()) and matching the date column
         cur.execute("""
             SELECT id FROM appointments 
             WHERE date = %s
@@ -164,7 +165,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         price_min, price_max = extract_price_ranges(estimate)
         full_labels = map_service_labels(payload.services)
 
-        # 3. INSERT INTO appointments
+        # 3. INSERT INTO appointments (Serialized to valid JSON array string)
         cur.execute("""
             INSERT INTO appointments (
                 client_id, date, start_time, end_time, status, services
@@ -177,11 +178,11 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
             start_time.time(),
             end_time.time(),
             "confirmed",
-            ", ".join(payload.services)
+            json.dumps(payload.services)
         ))
         booking_id = cur.fetchone()["id"]
 
-        # 4. INSERT INTO DAILY_APPOINTMENTS
+        # 4. INSERT INTO DAILY_APPOINTMENTS (Serialized full_labels string list into JSON format)
         cur.execute("""
             INSERT INTO daily_appointments (
                 booking_id, client_id, name, phone, service_address,
@@ -191,7 +192,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             booking_id, client_id, payload.name, payload.phone, payload.service_address,
-            full_labels, payload.issue_description, payload.date, payload.time,
+            json.dumps(full_labels), payload.issue_description, payload.date, payload.time,
             price_min, price_max
         ))
 
@@ -225,7 +226,6 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         }
 
     except HTTPException:
-        # Re-raise explicit HTTP exceptions (like our 400 Bad Request overlap)
         raise
     except Exception as e:
         logger.error(f"BOOKING ERROR: {e}", exc_info=True)
