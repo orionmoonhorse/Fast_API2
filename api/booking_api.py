@@ -165,15 +165,19 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         price_min, price_max = extract_price_ranges(estimate)
         full_labels = map_service_labels(payload.services)
 
-        # 3. INSERT INTO appointments (Serialized to valid JSON array string)
+        # 💡 Map the default provider ID to satisfy database NOT NULL constraints
+        provider_id = 1
+
+        # 3. INSERT INTO appointments (Includes provider_id and serialized JSON array)
         cur.execute("""
             INSERT INTO appointments (
-                client_id, date, start_time, end_time, status, services
+                client_id, provider_id, date, start_time, end_time, status, services
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             client_id,
+            provider_id,
             payload.date,
             start_time.time(),
             end_time.time(),
@@ -182,7 +186,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         ))
         booking_id = cur.fetchone()["id"]
 
-        # 4. INSERT INTO DAILY_APPOINTMENTS (Serialized full_labels string list into JSON format)
+        # 4. INSERT INTO DAILY_APPOINTMENTS
         cur.execute("""
             INSERT INTO daily_appointments (
                 booking_id, client_id, name, phone, service_address,
@@ -233,3 +237,4 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected database error occurred: {str(e)}"
         )
+
