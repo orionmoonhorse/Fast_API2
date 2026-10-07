@@ -163,12 +163,11 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         # Compute pricing estimate
         estimate = estimate_cost(payload.services, payload.issue_description)
         price_min, price_max = extract_price_ranges(estimate)
-        full_labels = map_service_labels(payload.services)
 
-        # 💡 Map the default provider ID to satisfy database NOT NULL constraints
+        # Map the default provider ID to satisfy database NOT NULL constraints
         provider_id = 1
 
-        # 3. INSERT INTO appointments (Includes provider_id and serialized JSON array)
+        # 3. INSERT INTO appointments
         cur.execute("""
             INSERT INTO appointments (
                 client_id, provider_id, date, start_time, end_time, status, services
@@ -185,20 +184,6 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
             json.dumps(payload.services)
         ))
         booking_id = cur.fetchone()["id"]
-
-        # 4. INSERT INTO DAILY_APPOINTMENTS
-        cur.execute("""
-            INSERT INTO daily_appointments (
-                booking_id, client_id, name, phone, service_address,
-                services, issue_description, date, time,
-                price_min, price_max
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            booking_id, client_id, payload.name, payload.phone, payload.service_address,
-            json.dumps(full_labels), payload.issue_description, payload.date, payload.time,
-            price_min, price_max
-        ))
 
         # Commit transaction stack
         conn.commit()
@@ -237,4 +222,3 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected database error occurred: {str(e)}"
         )
-
