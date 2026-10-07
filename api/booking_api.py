@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Literal
 import psycopg2.extras
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 from db import get_db
@@ -22,8 +22,8 @@ class BookingPayload(BaseModel):
     service_address: str | None = None
     services: List[Literal["diagnostic", "washer", "dryer"]]
     issue_description: str | None = None
-    date: str
-    time: str
+    date: str  # Format: "YYYY-MM-DD"
+    time: str  # Format: "HH:MM"
 
 
 # ============================
@@ -52,13 +52,10 @@ def get_snapshot_ranges():
 # ============================
 def map_service_labels(services: list):
     mapped = []
-
     if "washer" in services:
         mapped.append("Washer Repair")
-
     if "dryer" in services:
         mapped.append("Dryer Repair")
-
     if "diagnostic" in services:
         if "washer" in services:
             mapped.append("Washer Diagnostic")
@@ -66,7 +63,6 @@ def map_service_labels(services: list):
             mapped.append("Dryer Diagnostic")
         if "washer" not in services and "dryer" not in services:
             mapped.append("General Diagnostic")
-
     return mapped
 
 
@@ -84,7 +80,6 @@ def extract_price_ranges(estimate: dict):
 # ============================
 def estimate_cost(services: list, issue_description: str | None):
     issue_description = (issue_description or "").lower()
-
     diagnostic_min = 79
     diagnostic_max = 129
 
@@ -117,7 +112,7 @@ def estimate_cost(services: list, issue_description: str | None):
         "burning smell": 80
     }
 
-    additional = sum(
+        additional = sum(
         price for keyword, price in issue_keywords.items()
         if keyword in issue_description
     )
@@ -167,6 +162,30 @@ def estimate_cost(services: list, issue_description: str | None):
 def create_booking(payload: BookingPayload, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+    # 1. PARSE TIMESTAMPS & CALCULATE DURATION (Default: 2 hours)
+    try:
+        start_time = datetime.strptime(f"{payload.date} {payload.time}", "%Y-%m-%d %H:%M")
+        end_time = start_time + timedelta(hours=2)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date or time format.")
+
+    # 2. STRICT OVERLAP CHECK
+    # Returns true if an uncancelled booking starts before the new ends AND ends after the new starts
+    cur.execute("""
+        SELECT id FROM bookings 
+        WHERE status != 'cancelled'
+          AND start_time < %s 
+          AND end_time > %s
+        LIMIT 1
+    """, (end_time, start_time))
+    
+    conflict = cur.fetchone()
+    if conflict:
+        raise HTTPException(
+            status_code=400,
+            detail="This slot overlaps with an existing appointment. Please choose a different time."
+        )
+
     # Auto-create or reuse client
     cur.execute("SELECT id FROM clients WHERE phone = %s LIMIT 1", (payload.phone,))
     existing = cur.fetchone()
@@ -188,32 +207,35 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         ))
         client_id = cur.fetchone()["id"]
 
-    # Compute estimate
+    # Compute pricing estimate
     estimate = estimate_cost(payload.services, payload.issue_description)
+    price_min, price_max = extract_price_ranges(estimate)
+    full_labels = map_service_labels(payload.services)
 
-    # Insert booking
+    # 3. INSERT INTO BOOKINGS (Aligns with complete DB Schema)
     cur.execute("""
-        INSERT INTO bookings (client_id, services, issue_description, date, time, estimate_json)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO bookings (
+            client_id, date, created_at, start_time, end_time, 
+            status, services, issue_description, price_min, price_max, estimate_json
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
     """, (
         client_id,
+        payload.date,
+        datetime.now(),
+        start_time,
+        end_time,
+        "confirmed",  # Default starting status
         payload.services,
         payload.issue_description,
-        payload.date,
-        payload.time,
+        price_min,
+        price_max,
         json.dumps(estimate)
     ))
-
     booking_id = cur.fetchone()["id"]
 
-    # Build readable service labels
-    full_labels = map_service_labels(payload.services)
-
-    # Extract min/max pricing
-    price_min, price_max = extract_price_ranges(estimate)
-
-    # Insert into daily_appointments
+    # 4. INSERT INTO DAILY_APPOINTMENTS
     cur.execute("""
         INSERT INTO daily_appointments (
             booking_id, client_id, name, phone, service_address,
@@ -242,7 +264,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         sms_message = (
             f"Hi {payload.name}! Your diagnostic appointment is scheduled for "
             f"{payload.date} at {payload.time}. Diagnostic fee is "
-            f"${estimate['diagnostic_min']}–${estimate['diagnostic_max']} estimated."
+            f"${price_min}–${price_max} estimated."
         )
     else:
         sms_message = (
@@ -278,13 +300,13 @@ def get_daily_appointments(date: str, conn=Depends(get_db)):
 
 
 # ============================
-# ROUTE — AVAILABILITY (FINAL FIX)
+# ROUTE — AVAILABILITY (COMPLETED WITH OVERLAP LOGIC)
 # ============================
 @router.get("/availability")
 def get_availability(date: str, conn=Depends(get_db)):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Load all active slots
+    # 1. Load your standard list of start slots from the DB
     cur.execute("""
         SELECT slot_time
         FROM slots
@@ -293,26 +315,33 @@ def get_availability(date: str, conn=Depends(get_db)):
     """)
     all_slots = [row["slot_time"].strftime("%H:%M") for row in cur.fetchall()]
 
-    # Load booked slots from bookings
+    # 2. Grab all active time ranges already booked for that specific date
     cur.execute("""
-        SELECT time
-        FROM bookings
-        WHERE date = %s
+        SELECT start_time, end_time 
+        FROM bookings 
+        WHERE date = %s AND status != 'cancelled'
     """, (date,))
-    booked_from_bookings = [row["time"] for row in cur.fetchall()]
+    booked_ranges = cur.fetchall()
 
-    # Load booked slots from daily_appointments
-    cur.execute("""
-        SELECT time
-        FROM daily_appointments
-        WHERE date = %s
-    """, (date,))
-    booked_from_daily = [row["time"] for row in cur.fetchall()]
-
-    # Combine booked slots
-    booked_slots = set(booked_from_bookings + booked_from_daily)
-
-    # Remove booked slots
-    open_slots = [slot for slot in all_slots if slot not in booked_slots]
+    open_slots = []
+    
+    # 3. Filter your static slots against dynamic booking ranges
+    for slot in all_slots:
+        try:
+            slot_start = datetime.strptime(f"{date} {slot}", "%Y-%m-%d %H:%M")
+            slot_end = slot_start + timedelta(hours=2)  # Assuming a 2-hour window
+        except ValueError:
+            continue
+        
+        is_overlap = False
+        for booking in booked_ranges:
+            # Universal overlap mathematical rule
+            if slot_start < booking["end_time"] and slot_end > booking["start_time"]:
+                is_overlap = True
+                break  # Exit inner loop early if a conflict is found
+                
+        if not is_overlap:
+            open_slots.append(slot)
 
     return open_slots
+

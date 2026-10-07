@@ -1,6 +1,6 @@
 # availability_api.py
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from fastapi import APIRouter, Depends
 from db import get_db
 import psycopg2.extras
@@ -45,28 +45,26 @@ def get_availability(date: str, conn=Depends(get_db)):
     try:
         # Validate date format
         try:
-            date_obj = datetime.strptime(date, "%Y-%m-%d")
+            datetime.strptime(date, "%Y-%m-%d")
         except:
             return []
 
         provider_id = 1
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        # ⭐ Load slot definitions from Postgres
+        # ⭐ Load slot definitions (start times only)
         cur.execute("""
-            SELECT slot_time, duration
+            SELECT slot_time
             FROM time_slots
             WHERE provider_id = %s AND active = TRUE
             ORDER BY slot_time
         """, (provider_id,))
         rows = cur.fetchall()
 
-        # Build slot ranges
         slots = []
         for row in rows:
             slot_start = parse_time_safe(row["slot_time"])
-            slot_end = slot_start + timedelta(minutes=row["duration"])
-            slots.append((slot_start, slot_end))
+            slots.append(slot_start)
 
         # ⭐ Get booked slots from bookings
         cur.execute("""
@@ -87,9 +85,9 @@ def get_availability(date: str, conn=Depends(get_db)):
         # ⭐ Combine booked slots
         booked_slots = set(booked_from_bookings + booked_from_daily)
 
-        # ⭐ Remove booked slots
+        # ⭐ Remove ONLY exact booked start times
         open_slots = []
-        for slot_start, slot_end in slots:
+        for slot_start in slots:
             slot_str = format_time(slot_start)
             if slot_str not in booked_slots:
                 open_slots.append(slot_str)
