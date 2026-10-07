@@ -125,9 +125,9 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date or time format.")
 
-        # 2. STRICT OVERLAP CHECK
+        # 2. STRICT OVERLAP CHECK (Changed appointment_id to id)
         cur.execute("""
-            SELECT appointment_id FROM appointments 
+            SELECT id FROM appointments 
             WHERE status != 'cancelled'
               AND start_time < %s 
               AND end_time > %s
@@ -164,13 +164,13 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         price_min, price_max = extract_price_ranges(estimate)
         full_labels = map_service_labels(payload.services)
 
-        # 3. INSERT INTO appointments
+        # 3. INSERT INTO appointments (Changed RETURNING clause to id)
         cur.execute("""
             INSERT INTO appointments (
                 client_id, date, start_time, end_time, status, services
             )
             VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING appointment_id
+            RETURNING id
         """, (
             client_id,
             payload.date,
@@ -179,7 +179,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
             "confirmed",
             ", ".join(payload.services)
         ))
-        booking_id = cur.fetchone()["appointment_id"]
+        booking_id = cur.fetchone()["id"]
 
         # 4. INSERT INTO DAILY_APPOINTMENTS
         cur.execute("""
@@ -230,5 +230,3 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected database error occurred: {str(e)}"
         )
-
-
