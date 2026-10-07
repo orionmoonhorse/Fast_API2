@@ -178,7 +178,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
     # 2. STRICT OVERLAP CHECK
     # Returns true if an uncancelled booking starts before the new ends AND ends after the new starts
     cur.execute("""
-        SELECT id FROM bookings 
+        SELECT id FROM appointments 
         WHERE status != 'cancelled'
           AND start_time < %s 
           AND end_time > %s
@@ -218,9 +218,9 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
     price_min, price_max = extract_price_ranges(estimate)
     full_labels = map_service_labels(payload.services)
 
-    # 3. INSERT INTO BOOKINGS (Aligns with complete DB Schema)
+    # 3. INSERT INTO appointments (Aligns with complete DB Schema)
     cur.execute("""
-        INSERT INTO bookings (
+        INSERT INTO appointments (
             client_id, date, created_at, start_time, end_time, 
             status, services, issue_description, price_min, price_max, estimate_json
         )
@@ -324,7 +324,7 @@ def get_availability(date: str, conn=Depends(get_db)):
     # 2. Grab all active time ranges already booked for that specific date
     cur.execute("""
         SELECT start_time, end_time 
-        FROM bookings 
+        FROM appointments 
         WHERE date = %s AND status != 'cancelled'
     """, (date,))
     booked_ranges = cur.fetchall()
