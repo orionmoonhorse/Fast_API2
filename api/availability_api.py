@@ -66,13 +66,13 @@ def get_availability(date: str, conn=Depends(get_db)):
             slot_start = parse_time_safe(row["slot_time"])
             slots.append(slot_start)
 
-        # ⭐ Get booked slots from bookings
+        # ⭐ Get booked slots from appointments
         cur.execute("""
             SELECT time
-            FROM bookings
+            FROM appointments
             WHERE date = %s
         """, (date,))
-        booked_from_bookings = [row["time"] for row in cur.fetchall()]
+        booked_from_appointments = [row["time"] for row in cur.fetchall()]
 
         # ⭐ Get booked slots from daily_appointments
         cur.execute("""
@@ -83,7 +83,7 @@ def get_availability(date: str, conn=Depends(get_db)):
         booked_from_daily = [row["time"] for row in cur.fetchall()]
 
         # ⭐ Combine booked slots
-        booked_slots = set(booked_from_bookings + booked_from_daily)
+        booked_slots = set(booked_from_appointments + booked_from_daily)
 
         # ⭐ Remove ONLY exact booked start times
         open_slots = []
