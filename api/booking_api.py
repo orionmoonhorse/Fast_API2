@@ -80,6 +80,7 @@ def extract_price_ranges(estimate: dict):
 # ============================
 def estimate_cost(services: list, issue_description: str | None):
     issue_description = (issue_description or "").lower()
+
     diagnostic_min = 79
     diagnostic_max = 129
 
@@ -88,17 +89,18 @@ def estimate_cost(services: list, issue_description: str | None):
             "type": "diagnostic_only",
             "diagnostic_min": diagnostic_min,
             "diagnostic_max": diagnostic_max,
-            "diagnostic_estimated": f"{diagnostic_min}–{diagnostic_max} estimated",
+            "diagnostic_estimated": f"{diagnostic_min}-{diagnostic_max} estimated",
             "total_estimate": {
                 "min": diagnostic_min,
                 "max": diagnostic_max,
-                "estimated": f"{diagnostic_min}–{diagnostic_max} estimated"
+                "estimated": f"{diagnostic_min}-{diagnostic_max} estimated"
             },
-            "note": "Diagnostic selected — repair pricing hidden until after diagnosis."
+            "note": "Diagnostic selected - repair pricing hidden until after diagnosis."
         }
 
     washer_min = 129
     washer_max = 299
+
     dryer_min = 129
     dryer_max = 279
 
@@ -109,11 +111,12 @@ def estimate_cost(services: list, issue_description: str | None):
         "no power": 50,
         "not heating": 65,
         "loud noise": 40,
-        "burning smell": 80
+        "burning smell": 80,
     }
 
-        additional = sum(
-        price for keyword, price in issue_keywords.items()
+    additional = sum(
+        price
+        for keyword, price in issue_keywords.items()
         if keyword in issue_description
     )
 
@@ -124,22 +127,26 @@ def estimate_cost(services: list, issue_description: str | None):
     if "washer" in services:
         washer_total_min = washer_min + additional
         washer_total_max = washer_max + additional
+
         breakdown["washer"] = {
             "min": washer_total_min,
             "max": washer_total_max,
-            "estimated": f"{washer_total_min}–{washer_total_max} estimated"
+            "estimated": f"{washer_total_min}-{washer_total_max} estimated"
         }
+
         total_min += washer_total_min
         total_max += washer_total_max
 
     if "dryer" in services:
         dryer_total_min = dryer_min + additional
         dryer_total_max = dryer_max + additional
+
         breakdown["dryer"] = {
             "min": dryer_total_min,
             "max": dryer_total_max,
-            "estimated": f"{dryer_total_min}–{dryer_total_max} estimated"
+            "estimated": f"{dryer_total_min}-{dryer_total_max} estimated"
         }
+
         total_min += dryer_total_min
         total_max += dryer_total_max
 
@@ -150,10 +157,9 @@ def estimate_cost(services: list, issue_description: str | None):
         "total_estimate": {
             "min": total_min,
             "max": total_max,
-            "estimated": f"{total_min}–{total_max} estimated"
+            "estimated": f"{total_min}-{total_max} estimated"
         }
     }
-
 
 # ============================
 # ROUTE — CREATE BOOKING
