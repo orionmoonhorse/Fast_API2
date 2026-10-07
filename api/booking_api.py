@@ -1,5 +1,3 @@
-# booking_api.py
-
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
 from typing import List, Literal
@@ -125,14 +123,16 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date or time format.")
 
-        # 2. STRICT OVERLAP CHECK (Changed appointment_id to id)
+        # 2. STRICT OVERLAP CHECK
+        # Fixed comparison types by passing pure time objects (.time()) and matching the date column
         cur.execute("""
             SELECT id FROM appointments 
-            WHERE status != 'cancelled'
+            WHERE date = %s
+              AND status != 'cancelled'
               AND start_time < %s 
               AND end_time > %s
             LIMIT 1
-        """, (end_time, start_time))
+        """, (payload.date, end_time.time(), start_time.time()))
         
         conflict = cur.fetchone()
         if conflict:
@@ -164,7 +164,7 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
         price_min, price_max = extract_price_ranges(estimate)
         full_labels = map_service_labels(payload.services)
 
-        # 3. INSERT INTO appointments (Changed RETURNING clause to id)
+        # 3. INSERT INTO appointments
         cur.execute("""
             INSERT INTO appointments (
                 client_id, date, start_time, end_time, status, services
@@ -224,6 +224,9 @@ def create_booking(payload: BookingPayload, conn=Depends(get_db)):
             "message": "Appointment booked successfully."
         }
 
+    except HTTPException:
+        # Re-raise explicit HTTP exceptions (like our 400 Bad Request overlap)
+        raise
     except Exception as e:
         logger.error(f"BOOKING ERROR: {e}", exc_info=True)
         raise HTTPException(
