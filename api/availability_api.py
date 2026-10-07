@@ -1,9 +1,13 @@
 # availability_api.py
 
 from datetime import datetime, time, timedelta
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from db import get_db
 import psycopg2.extras
+import logging
+
+# Set up logging instead of basic print statements
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -42,13 +46,16 @@ def format_time(dt: datetime) -> str:
 
 @router.get("/availability")
 def get_availability(date: str, conn=Depends(get_db)):
+    # 1. Validate input date format (Return a client error if bad format)
     try:
-        # Validate input date format
-        try:
-            datetime.strptime(date, "%Y-%m-%d")
-        except ValueError:
-            return []
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid date format. Expected YYYY-MM-DD."
+        )
 
+    try:
         provider_id = 1
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -63,7 +70,7 @@ def get_availability(date: str, conn=Depends(get_db)):
         """, (provider_id, date))
         schedule = cur.fetchone()
 
-        # Fallback: If no custom schedule is set for this day, default to a standard 9 AM - 5 PM shift
+        # Fallback: Default to a standard 9 AM - 5 PM shift
         if schedule:
             shift_start = parse_time_safe(schedule["start_time"])
             shift_end = parse_time_safe(schedule["end_time"])
@@ -81,7 +88,7 @@ def get_availability(date: str, conn=Depends(get_db)):
         current_slot = shift_start
         while current_slot < shift_end:
             slots.append(current_slot)
-            current_slot += timedelta(minutes=30)  # Change 30 to any duration increment you want
+            current_slot += timedelta(minutes=30)
 
         # -------------------------------------------------------------
         # 3. Gather all active booked windows from the appointments table
@@ -107,7 +114,6 @@ def get_availability(date: str, conn=Depends(get_db)):
             is_blocked = False
             
             for block_start, block_end in blocked_ranges:
-                # If the generated slot falls during a booked meeting, mark it blocked
                 if block_start <= slot_start < block_end:
                     is_blocked = True
                     break
@@ -118,5 +124,11 @@ def get_availability(date: str, conn=Depends(get_db)):
         return open_slots
 
     except Exception as e:
-        print("AVAILABILITY ERROR:", e)
-        return []
+        # Log the error trace on the server side
+        logger.error(f"AVAILABILITY ERROR: {e}", exc_info=True)
+        
+        # Raise an HTTP 500 error to alert the caller that something broke
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing availability updates."
+        )
