@@ -62,10 +62,11 @@ def get_availability(date: str, conn=Depends(get_db)):
         # -------------------------------------------------------------
         # 1. Fetch the provider's shift limits from daily_schedule
         # -------------------------------------------------------------
+        # Removed "AND active = TRUE" to match your current database schema
         cur.execute("""
             SELECT start_time, end_time 
             FROM daily_schedule 
-            WHERE provider_id = %s AND date = %s AND active = TRUE
+            WHERE provider_id = %s AND date = %s
             LIMIT 1
         """, (provider_id, date))
         schedule = cur.fetchone()
